@@ -22,24 +22,24 @@ int main(int argc, char** argv){
     topology = new Topology();
     // topology->generateFattree(8, 1, 1);
     // topology->generateOneBigSwitch(8, 1); // capacity * factor
-    topology->generateOneBigSwitch(16*8*8, 400.0*1000000000/8); // capacity * factor
+    topology->generateOneBigSwitch(1 * 1 * 4, 400.0 * 1000000000 / 8, 800.0 * 1000000000 / 8); // Add NVLink capacity
     // topology->print();
     auto current = chrono::high_resolution_clock::now();
     cout << "Topology generation Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
     start = current;
     cout << "--------------------------" << endl;
     
-    workload = new Workload(16,      // PP
-                            8,      // DP      
-                            8,      // TP 
-                            192,      // microbatches   
-                            0.005782,    // fwdCompTime * factor
-                            0.015002,    // bwdCompTime * factor
-                            1056964608,    // fwdTPSize
-                            1056964608,    // bwdTPSize
-                            11796480,    // fwdPPSize
-                            11796480,    // bwdPPSize
-                            5121446400     // dpSize
+    workload = new Workload(1,      // PP
+                            1,      // DP      
+                            4,      // TP 
+                            64,      // microbatches   
+                            4.086492,    // fwdCompTime * factor
+                            6.6145,    // bwdCompTime * factor
+                            6442450944,    // fwdTPSize
+                            6442450944,    // bwdTPSize
+                            0,    // fwdPPSize
+                            0,    // bwdPPSize
+                            0     // dpSize
                         );
     // workload = new Workload(2,      // PP
     //                         2,      // DP      

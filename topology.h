@@ -25,6 +25,7 @@ public:
 
     // workload
     Rank* rank;
+    vector<Rank*> ranks; // Add this line to track ranks on the node
 
     // simulator related
     double throughput;
@@ -38,7 +39,9 @@ public:
     Node* src;
     Node* dst;
     double capacity;
-    Link(int id, Node* src, Node* dst, double capacity = 0.0) : id(id), src(src), dst(dst), capacity(capacity) {}
+    bool isNVLink; // Add this flag to indicate if the link is an NVLink
+    Link(int id, Node* src, Node* dst, double capacity = 0.0, bool isNVLink = false)
+        : id(id), src(src), dst(dst), capacity(capacity), isNVLink(isNVLink) {}
 
     // simulator related 
     double throughput;
@@ -62,10 +65,10 @@ public:
     }
 
     void generateFattree(int switch_radix, int pods, double capacity);
-    void generateOneBigSwitch(int switch_radix, double capacity);
+    void generateOneBigSwitch(int switch_radix, double capacity, double nvlink_capacity);
     // void routing();
 
-    vector<Node*> ECMP(Node* src, Node* dst);
+    vector<Node*> ECMP(Node* src, Node* dst, double capacity); // Updated to include capacity
 
     void print();
 };

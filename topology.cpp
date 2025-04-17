@@ -1,5 +1,3 @@
-
-
 #include "topology.h"
 #include "workload.h"
 #include "common.h"
@@ -106,7 +104,7 @@ void Topology::generateFattree(int switch_radix, int pods, double capacity){
 
 }
 
-void Topology::generateOneBigSwitch(int switch_radix, double capacity) {
+void Topology::generateOneBigSwitch(int switch_radix, double capacity, double nvlink_capacity) {
     int numHosts = switch_radix;
     int nodeId = 0;
 
@@ -128,10 +126,21 @@ void Topology::generateOneBigSwitch(int switch_radix, double capacity) {
         nodes[i]->links.push_back(link1);
         nodes[numHosts]->links.push_back(link2);
     }
+
+    // Add NVLink connections (every 8 hosts share one NVLink group)
+    for (int i = 0; i < numHosts; i += 8) {
+        for (int j = i; j < i + 8 && j < numHosts; ++j) {
+            for (int k = j + 1; k < i + 8 && k < numHosts; ++k) {
+                Link* nvlink = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // Mark as NVLink
+                links.push_back(nvlink);
+                nodes[j]->links.push_back(nvlink);
+                nodes[k]->links.push_back(nvlink);
+            }
+        }
+    }
 }
 
-
-vector<Node*> Topology::ECMP(Node* src, Node* dst) {
+vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity) {
     vector<vector<Node*>> allPaths;
     queue<vector<Node*>> q;
     unordered_set<Node*> visited;
@@ -153,13 +162,27 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst) {
         // Mark the current node as visited for this path
         visited.insert(current);
 
-        // Explore neighbors
+        // Explore NVLink neighbors first
         for (auto link : current->links) {
-            Node* neighbor = link->dst;
-            if (visited.find(neighbor) == visited.end()) {
-                vector<Node*> newPath = path;
-                newPath.push_back(neighbor);
-                q.push(newPath);
+            if (link->isNVLink) { // Prioritize NVLink
+                Node* neighbor = link->dst;
+                if (visited.find(neighbor) == visited.end()) {
+                    vector<Node*> newPath = path;
+                    newPath.push_back(neighbor);
+                    q.push(newPath);
+                }
+            }
+        }
+
+        // Explore remaining neighbors (non-NVLink)
+        for (auto link : current->links) {
+            if (!link->isNVLink && link->capacity >= capacity) { // Regular links
+                Node* neighbor = link->dst;
+                if (visited.find(neighbor) == visited.end()) {
+                    vector<Node*> newPath = path;
+                    newPath.push_back(neighbor);
+                    q.push(newPath);
+                }
             }
         }
     }

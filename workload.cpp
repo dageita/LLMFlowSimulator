@@ -297,23 +297,33 @@ void Workload::placement(){
         Node* host = hosts[i % hosts.size()];
         rank->host = host;
         host->rank = rank;
+        host->ranks.push_back(rank); // Track all ranks on the same host
     }
 }
+
 void Workload::routing(){
     // iterate on connections
     for(auto group : groups) {
         for(auto conn : group->connections) {
             Node* src = conn->src->host;
             Node* dst = conn->dst->host;
-            vector<Node*> path = topology->ECMP(src, dst);
-            conn->path = path;
-            for(int i = 0; i < path.size() - 1; ++i) {
-                Node* src = path[i];
-                Node* dst = path[i + 1];
-                for(auto link : src->links) {
-                    if(link->src == src && link->dst == dst) {
-                        conn->pathLinks.push_back(link);
-                        break;
+
+            if (src == dst) {
+                // Intra-host communication (e.g., NVLink)
+                conn->path = {src};
+                conn->pathLinks = {}; // No external links needed
+            } else {
+                // Inter-host communication
+                vector<Node*> path = topology->ECMP(src, dst, 400.0 * 1000000000 / 8); // Pass capacity
+                conn->path = path;
+                for(int i = 0; i < path.size() - 1; ++i) {
+                    Node* src = path[i];
+                    Node* dst = path[i + 1];
+                    for(auto link : src->links) {
+                        if(link->src == src && link->dst == dst) {
+                            conn->pathLinks.push_back(link);
+                            break;
+                        }
                     }
                 }
             }
