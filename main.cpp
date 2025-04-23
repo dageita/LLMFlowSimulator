@@ -33,8 +33,8 @@ int main(int argc, char** argv){
                             1,      // DP      
                             4,      // TP 
                             64,      // microbatches   
-                            4.086492,    // fwdCompTime * factor
-                            6.6145,    // bwdCompTime * factor
+                            0.06385143254309411,    // fwdCompTime * factor
+                            0.10335142783278387,    // bwdCompTime * factor
                             6442450944,    // fwdTPSize
                             6442450944,    // bwdTPSize
                             0,    // fwdPPSize
