@@ -670,3 +670,58 @@ void Simulator::run(){
     cout << "Global Time: " << globalTime << endl;
     cout << "---------------------------" << endl;
 }
+
+float Simulator::py_run(){
+    globalTime=0;
+    cout << "===========================" << endl;
+    int round = 0;
+    int targetRound = -1;    
+    while(true){
+        // cout << "===========================" << endl;
+        // cout << "Global Time: " << globalTime << ", Round " << round << endl;
+        // cout << "----------------------------" << endl;
+        // cout << " before handle events" << endl;
+        if(round==targetRound) printStates(); // !!!!!!!!!!!!!!
+
+        while(1){
+            int countEvents = 0;
+            for(auto task : tasks){
+                countEvents += task->handleEvents();
+            }
+            if(countEvents == 0) break;
+        }
+        // cout << " after handle events, before update states" << endl;
+        if(round==targetRound) printStates(); // !!!!!!!!!!!!!!
+        // update states
+        updateStates();
+        // cout << "----------------------------" << endl;
+        // cout << " after update states " << endl;
+        if(round==targetRound) printStates(); // !!!!!!!!!!!!!!!
+        // stable time
+        double time = numeric_limits<double>::infinity();
+        for(auto task : tasks){
+            double t = task->stableTime();
+            if(t < time) time = t;
+        }
+        // cout << "----------------------------" << endl;
+        // cout << "Stable time: " << time << endl;
+        if(time == numeric_limits<double>::infinity()){
+            break;
+        }
+        // progress
+        for(auto task : tasks){
+            task->progress(time);
+        }
+        globalTime += time;
+
+        // cout << "Progressed time: " << time << endl;
+        // cout << "---------------------------" << endl;
+        if(round==targetRound )printStates(); // !!!!!!!!!!!!!!!
+        // cout << "===========================" << endl;
+        round++;
+    }
+    cout << "Simulation finished" << endl;
+    cout << "Global Time: " << globalTime << endl;
+    cout << "---------------------------" << endl;
+    return globalTime;
+}

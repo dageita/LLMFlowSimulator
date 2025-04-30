@@ -140,6 +140,64 @@ void Topology::generateOneBigSwitch(int switch_radix, double capacity, double nv
     }
 }
 
+void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlink_capacity) {
+    int numHosts = switch_radix * switch_radix / 2; // Hosts per leaf switch
+    int numLeaf = switch_radix / 2; // Number of leaf switches
+    int numSpine = switch_radix / 2; // Number of spine switches
+
+    int nodeId = 0;
+    // Build hosts
+    for (int i = 0; i < numHosts; ++i) {
+        nodes.push_back(new Node(nodeId++, NodeType::HOST));
+    }
+
+    // Build leaf switches
+    for (int i = 0; i < numLeaf; ++i) {
+        nodes.push_back(new Node(nodeId++, NodeType::TOR));
+    }
+
+    // Build spine switches
+    for (int i = 0; i < numSpine; ++i) {
+        nodes.push_back(new Node(nodeId++, NodeType::CORE));
+    }
+
+    int linkId = 0;
+    // Connect hosts to leaf switches
+    for (int i = 0; i < numHosts; ++i) {
+        int leafIndex = i / (numHosts / numLeaf);
+        Link* link1 = new Link(linkId++, nodes[i], nodes[numHosts + leafIndex], capacity);
+        Link* link2 = new Link(linkId++, nodes[numHosts + leafIndex], nodes[i], capacity);
+        links.push_back(link1);
+        links.push_back(link2);
+        nodes[i]->links.push_back(link1);
+        nodes[numHosts + leafIndex]->links.push_back(link2);
+    }
+
+    // Connect leaf switches to spine switches
+    for (int i = 0; i < numLeaf; ++i) {
+        for (int j = 0; j < numSpine; ++j) {
+            Link* link1 = new Link(linkId++, nodes[numHosts + i], nodes[numHosts + numLeaf + j], capacity);
+            Link* link2 = new Link(linkId++, nodes[numHosts + numLeaf + j], nodes[numHosts + i], capacity);
+            links.push_back(link1);
+            links.push_back(link2);
+            nodes[numHosts + i]->links.push_back(link1);
+            nodes[numHosts + numLeaf + j]->links.push_back(link2);
+        }
+    }
+
+    // Add NVLink connections (every 8 hosts share one NVLink group)
+    for (int i = 0; i < numHosts; i += 8) {
+        for (int j = i; j < i + 8 && j < numHosts; ++j) {
+            for (int k = j + 1; k < i + 8 && k < numHosts; ++k) {
+                Link* nvlink = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // Mark as NVLink
+                links.push_back(nvlink);
+                nodes[j]->links.push_back(nvlink);
+                nodes[k]->links.push_back(nvlink);
+            }
+        }
+    }
+}
+
 vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity) {  // Prompt：运行bfs搜索所有路径，并随机返回一条
     vector<vector<Node*>> allPaths;
     queue<vector<Node*>> q;
@@ -189,6 +247,7 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity) {  // Prompt
 
     // If no paths are found, return an empty vector
     if (allPaths.empty()) {
+        cerr << "Error: No valid path found between nodes " << src->id << " and " << dst->id << " with capacity " << capacity << endl;
         return {};
     }
 

@@ -65,6 +65,7 @@ public:
     }
 
     void generateFattree(int switch_radix, int pods, double capacity);
+    void generateSpineleaf(int switch_radix, double capacity, double nvlink_capacity);
     void generateOneBigSwitch(int switch_radix, double capacity, double nvlink_capacity);
     // void routing();
 
