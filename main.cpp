@@ -3,6 +3,7 @@
 #include "simulator.h"
 #include <chrono>
 #include <iostream>
+#include <cstdint>
 
 using namespace std;
 
@@ -15,7 +16,8 @@ inter, intra: GBps
 fwdTPSize...: Bytes
 */
 extern "C" {
-    float pycall_main(int pp, int dp, int tp, float inter, float intra, int microbatches, int fwdTPSize, int bwdTPSize, int fwdPPSize, int bwdPPSize, int dpSize) {
+    float pycall_main(int pp, int dp, int tp, double inter, double intra, int microbatches, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize) {
+        cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << endl;
         // srand(time(nullptr));
         srand(0);
 
@@ -27,7 +29,7 @@ extern "C" {
         // topology->generateFattree(8, 1, 1);
         // topology->generateOneBigSwitch(8, 1); // capacity * factor
         // topology->generateOneBigSwitch(pp * dp * tp, inter * 1000000000 / 8, intra * 1000000000 / 8); // Add NVLink capacity
-        topology->generateSpineleaf(pp * dp * tp, inter * 1000000000 / 8, intra * 1000000000 / 8);
+        topology->generateSpineleaf(pp * dp * tp, inter, intra);
         // topology->print();
         auto current = chrono::high_resolution_clock::now();
         cout << "Topology generation Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
@@ -111,8 +113,8 @@ int main(int argc, char** argv){
                             1,      // DP      
                             8,      // TP 
                             32,      // microbatches   
-                            0.09878157772321658,    // fwdCompTime * factor
-                            0.20379106138582712,    // bwdCompTime * factor
+                            0.00000001,    // fwdCompTime * factor
+                            0.00000001,    // bwdCompTime * factor
                             2818572288,    // fwdTPSize
                             2818572288,    // bwdTPSize
                             0,    // fwdPPSize

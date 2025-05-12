@@ -2,3 +2,4 @@ simulator
 log.txt
 .vscode/*
 main
+*.so
