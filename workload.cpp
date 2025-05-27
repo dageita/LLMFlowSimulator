@@ -287,10 +287,10 @@ void Workload::placement(){
     }
 }
 
-void Workload::routing(){
+void Workload::routing(double inter, double intra) {
     // iterate on connections
-    for(auto group : groups) {
-        for(auto conn : group->connections) {
+    for (auto group : groups) {
+        for (auto conn : group->connections) {
             Node* src = conn->src->host;
             Node* dst = conn->dst->host;
 
@@ -300,13 +300,14 @@ void Workload::routing(){
                 conn->pathLinks = {}; // No external links needed
             } else {
                 // Inter-host communication
-                vector<Node*> path = topology->ECMP(src, dst, 400.0 * 1000000000 / 8); // Pass capacity
+                double capacity = (src->type == NodeType::HOST && dst->type == NodeType::HOST) ? intra : inter;
+                vector<Node*> path = topology->ECMP(src, dst, capacity); // Pass capacity dynamically
                 conn->path = path;
-                for(int i = 0; i < path.size() - 1; ++i) {
+                for (int i = 0; i < path.size() - 1; ++i) {
                     Node* src = path[i];
                     Node* dst = path[i + 1];
-                    for(auto link : src->links) {
-                        if(link->src == src && link->dst == dst) {
+                    for (auto link : src->links) {
+                        if (link->src == src && link->dst == dst) {
                             conn->pathLinks.push_back(link);
                             break;
                         }

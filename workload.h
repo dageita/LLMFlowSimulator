@@ -99,7 +99,7 @@ public:
 
     Topology *topology;
     void placement();
-    void routing();
+    void routing(double inter, double intra);
     
     void print();
 };

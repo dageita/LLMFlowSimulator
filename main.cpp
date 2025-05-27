@@ -12,12 +12,12 @@ Workload* workload = nullptr;
 Simulator* simulator = nullptr;
 
 /*
-inter, intra: GBps
+inter, intra: Bps
 fwdTPSize...: Bytes
 */
 extern "C" {
     float pycall_main(int pp, int dp, int tp, double inter, double intra, int microbatches, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize) {
-        cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << endl;
+        cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << " " << dpSize << endl;
         // srand(time(nullptr));
         srand(0);
 
@@ -63,7 +63,7 @@ extern "C" {
         workload->topology = topology;
         workload->configureParallelism();   // 1F1B now
         workload->placement();
-        workload->routing();
+        workload->routing(inter, intra);
         // workload->print();
         // return 0;
         current = chrono::high_resolution_clock::now();
@@ -136,7 +136,7 @@ int main(int argc, char** argv){
     workload->topology = topology;
     workload->configureParallelism();   // 1F1B now
     workload->placement();
-    workload->routing();
+    workload->routing(400.0 * 1000000000 / 8, 400.0 * 1000000000 / 8);
     // workload->print();
     // return 0;
     current = chrono::high_resolution_clock::now();
