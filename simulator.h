@@ -130,6 +130,7 @@ public:
 
     void initialize();
     void updateStates(); // waiter filling
+    void updateLinkStates(std::set<Flow*>& activeFlows, std::set<Link*>& activeLinks);
     void run() ;
     float py_run() ;
 

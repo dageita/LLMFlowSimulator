@@ -21,6 +21,7 @@ public:
     int id;
     NodeType type;
     vector<Link*> links;  // directed links from Node
+    vector<Link*> nvlinks;
     Node(int id, NodeType type) : id(id), type(type) { rank = nullptr; }
 
     // workload
@@ -54,6 +55,7 @@ class Topology {
 public:
     vector<Node*> nodes;
     vector<Link*> links;
+    bool isSingleMachine = false; // 标志是否为单机网络
     Topology() {}
     ~Topology() {
         for (auto node : nodes) {
@@ -67,9 +69,10 @@ public:
     void generateFattree(int switch_radix, int pods, double capacity);
     void generateSpineleaf(int switch_radix, double capacity, double nvlink_capacity);
     void generateOneBigSwitch(int switch_radix, double capacity, double nvlink_capacity);
+    void generateSingleMachine(int numGPUs, double nvlink_capacity);
     // void routing();
 
-    vector<Node*> ECMP(Node* src, Node* dst, double capacity); // Updated to include capacity
+    vector<Node*> ECMP(Node* src, Node* dst, double capacity, double nvlink_capacity); // Updated to include capacity
 
     void print();
 };

@@ -626,7 +626,7 @@ void Simulator::run(){
         // cout << "===========================" << endl;
         // cout << "Global Time: " << globalTime << ", Round " << round << endl;
         // cout << "----------------------------" << endl;
-        // cout << " before handle events" << endl;
+        cout << " before handle events" << endl;
         if(round==targetRound) printStates(); // !!!!!!!!!!!!!!
 
         while(1){
@@ -640,7 +640,7 @@ void Simulator::run(){
         if(round==targetRound) printStates(); // !!!!!!!!!!!!!!
         // update states
         updateStates();
-        // cout << "----------------------------" << endl;
+        cout << "----------------------------" << endl;
         // cout << " after update states " << endl;
         if(round==targetRound) printStates(); // !!!!!!!!!!!!!!!
         // stable time

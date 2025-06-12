@@ -108,37 +108,82 @@ void Topology::generateOneBigSwitch(int switch_radix, double capacity, double nv
     int numHosts = switch_radix;
     int nodeId = 0;
 
-    // build hosts
+    // 创建主机节点
     for (int i = 0; i < numHosts; ++i) {
         nodes.push_back(new Node(nodeId++, NodeType::HOST));
     }
 
-    // build switch
+    // 创建交换机节点
     nodes.push_back(new Node(nodeId++, NodeType::TOR));
 
     int linkId = 0;
-    // connect hosts to switch
+    // 连接主机到交换机
     for (int i = 0; i < numHosts; ++i) {
-        Link* link1 = new Link(linkId++, nodes[i], nodes[numHosts], capacity);
-        Link* link2 = new Link(linkId++, nodes[numHosts], nodes[i], capacity);
+        Link* link1 = new Link(linkId++, nodes[i], nodes[numHosts], capacity); // 主机到交换机
+        Link* link2 = new Link(linkId++, nodes[numHosts], nodes[i], capacity); // 交换机到主机
         links.push_back(link1);
         links.push_back(link2);
         nodes[i]->links.push_back(link1);
         nodes[numHosts]->links.push_back(link2);
     }
 
-    // Add NVLink connections (every 8 hosts share one NVLink group)
+    // 添加 NVLink 连接（每 8 个主机共享一个 NVLink 组）
     for (int i = 0; i < numHosts; i += 8) {
         for (int j = i; j < i + 8 && j < numHosts; ++j) {
             for (int k = j + 1; k < i + 8 && k < numHosts; ++k) {
-                Link* nvlink = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // Mark as NVLink
-                links.push_back(nvlink);
-                nodes[j]->links.push_back(nvlink);
-                nodes[k]->links.push_back(nvlink);
+                // 创建双向 NVLink
+                Link* nvlink1 = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // 标记为 NVLink
+                Link* nvlink2 = new Link(linkId++, nodes[k], nodes[j], nvlink_capacity, true); // 反向 NVLink
+                links.push_back(nvlink1); // 全局 links 中存储 NVLink
+                links.push_back(nvlink2); // 全局 links 中存储反向 NVLink
+                nodes[j]->nvlinks.push_back(nvlink1); // 存储到 nvlinks
+                nodes[k]->nvlinks.push_back(nvlink2); // 存储到 nvlinks
             }
         }
     }
+
+    // 添加组间 NVLink 连接
+    // 计算总组数
+    int numGroups = (numHosts + 7) / 8; // 向上取整
+    
+    // 遍历所有组对
+    for (int g1 = 0; g1 < numGroups; ++g1) {
+        for (int g2 = g1 + 1; g2 < numGroups; ++g2) {
+            // 获取组1的节点范围
+            int start1 = g1 * 8;
+            int end1 = std::min(start1 + 8, numHosts);
+            
+            // 获取组2的节点范围
+            int start2 = g2 * 8;
+            int end2 = std::min(start2 + 8, numHosts);
+            
+            // 组间两两连接
+            for (int i = start1; i < end1; ++i) {
+                for (int j = start2; j < end2; ++j) {
+                    // 创建双向 NVLink
+                    Link* interLink1 = new Link(linkId++, nodes[i], nodes[j], capacity);
+                    Link* interLink2 = new Link(linkId++, nodes[j], nodes[i], capacity);
+                    links.push_back(interLink1);
+                    links.push_back(interLink2);
+                    nodes[i]->nvlinks.push_back(interLink1);
+                    nodes[j]->nvlinks.push_back(interLink2);
+                }
+            }
+        }
+    }
+
+    // 打印节点和连接
+    cout << "Nodes:" << endl;
+    for (auto node : nodes) {
+        cout << "Node ID: " << node->id << ", Type: " << node->type << endl;
+    }
+    cout << "Links:" << endl;
+    for (auto link : links) {
+        cout << "Link ID: " << link->id << ", Src: " << link->src->id << ", Dst: " << link->dst->id << ", Capacity: " << link->capacity << ", isNVLink: " << link->isNVLink << endl;
+    }
+    cout << "wxftest Generated one big switch topology with " << numHosts << " hosts and NVLink capacity: " << nvlink_capacity << endl;
 }
+
 
 void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlink_capacity) {
     int numHosts = switch_radix * switch_radix / 2; // Hosts per leaf switch
@@ -189,19 +234,46 @@ void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlin
     for (int i = 0; i < numHosts; i += 8) {
         for (int j = i; j < i + 8 && j < numHosts; ++j) {
             for (int k = j + 1; k < i + 8 && k < numHosts; ++k) {
-                Link* nvlink = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // Mark as NVLink
+                Link* nvlink = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // 标记为 NVLink
                 links.push_back(nvlink);
-                nodes[j]->links.push_back(nvlink);
-                nodes[k]->links.push_back(nvlink);
+                nodes[j]->nvlinks.push_back(nvlink);
+                nodes[k]->nvlinks.push_back(nvlink);
             }
         }
     }
 }
 
-vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity) {  // Prompt：运行bfs搜索所有路径，并随机返回一条
+void Topology::generateSingleMachine(int numGPUs, double nvlink_capacity) {
+    cout << "Generating single machine topology with " << numGPUs << " GPUs and NVLink capacity: " << nvlink_capacity << endl;
+    int nodeId = 0;
+
+    // 创建 GPU 节点
+    for (int i = 0; i < numGPUs; ++i) {
+        nodes.push_back(new Node(nodeId++, NodeType::HOST)); // 每个 GPU 是一个 HOST 节点
+    }
+
+    int linkId = 0;
+    // 添加 NVLink 连接（每两个 GPU 之间连接）
+    for (int i = 0; i < numGPUs; ++i) {
+        for (int j = i + 1; j < numGPUs; ++j) {
+            Link* nvlink = new Link(linkId++, nodes[i], nodes[j], nvlink_capacity, true); // 标记为 NVLink
+            links.push_back(nvlink);
+            nodes[i]->nvlinks.push_back(nvlink); // 存储到 nvlinks
+            nodes[j]->nvlinks.push_back(nvlink); // 存储到 nvlinks
+        }
+    }
+}
+
+vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity, double nvlink_capacity) {
+    cout << "wxftest ECMP src " << src->id << " dst " << dst->id << " capacity: " << capacity << endl;
     vector<vector<Node*>> allPaths;
     queue<vector<Node*>> q;
     unordered_set<Node*> visited;
+
+    if (isSingleMachine) {
+        cerr << "Error: ECMP is not applicable for single-machine topology." << endl;
+        return {};
+    }
 
     // Start BFS from the source node
     q.push({src});
@@ -221,8 +293,8 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity) {  // Prompt
         visited.insert(current);
 
         // Explore NVLink neighbors first
-        for (auto link : current->links) {
-            if (link->isNVLink) { // Prioritize NVLink
+        for (auto link : current->nvlinks) {
+            if (link->capacity >= capacity || (link->isNVLink && link->capacity >= nvlink_capacity)) {
                 Node* neighbor = link->dst;
                 if (visited.find(neighbor) == visited.end()) {
                     vector<Node*> newPath = path;
@@ -232,9 +304,9 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity) {  // Prompt
             }
         }
 
-        // Explore remaining neighbors (non-NVLink)
+        // Explore remaining neighbors (network links)
         for (auto link : current->links) {
-            if (!link->isNVLink && link->capacity >= capacity) { // Regular links
+            if (link->capacity >= capacity || (link->isNVLink && link->capacity >= nvlink_capacity)) {
                 Node* neighbor = link->dst;
                 if (visited.find(neighbor) == visited.end()) {
                     vector<Node*> newPath = path;

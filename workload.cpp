@@ -276,7 +276,6 @@ void Workload::placement(){
     sort(hosts.begin(), hosts.end(), [](Node* a, Node* b) {
         return a->id < b->id;
     });
-
     // mapping
     for(int i = 0; i < ranks.size(); ++i) {
         Rank* rank = ranks[i];
@@ -298,10 +297,17 @@ void Workload::routing(double inter, double intra) {
                 // Intra-host communication (e.g., NVLink)
                 conn->path = {src};
                 conn->pathLinks = {}; // No external links needed
+            } else if (topology->isSingleMachine) {
+                // Single-machine routing: direct NVLink connection
+                conn->path = {src, dst};
+                for (auto link : src->links) {
+                    if (link->dst == dst && link->isNVLink) {
+                        conn->pathLinks.push_back(link);
+                        break;
+                    }
+                }
             } else {
-                // Inter-host communication
-                double capacity = (src->type == NodeType::HOST && dst->type == NodeType::HOST) ? intra : inter;
-                vector<Node*> path = topology->ECMP(src, dst, capacity); // Pass capacity dynamically
+                vector<Node*> path = topology->ECMP(src, dst, inter, intra); // Pass capacity dynamically
                 conn->path = path;
                 for (int i = 0; i < path.size() - 1; ++i) {
                     Node* src = path[i];

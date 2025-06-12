@@ -26,10 +26,22 @@ extern "C" {
 
         cout << "--------------------------" << endl;
         topology = new Topology();
+
+        int totalRanks = pp * dp * tp;
+        if (totalRanks <= 8) {
+            // 单机内拓扑
+            topology->isSingleMachine = true;
+            topology->generateSingleMachine(totalRanks, intra); // NVLink capacity
+        } else {
+            // 跨机拓扑
+            topology->isSingleMachine = false;
+            topology->generateOneBigSwitch(totalRanks, inter, intra); // Inter/Intra capacity
+        }
+
         // topology->generateFattree(8, 1, 1);
         // topology->generateOneBigSwitch(8, 1); // capacity * factor
         // topology->generateOneBigSwitch(pp * dp * tp, inter * 1000000000 / 8, intra * 1000000000 / 8); // Add NVLink capacity
-        topology->generateSpineleaf(pp * dp * tp, inter, intra);
+        // topology->generateSpineleaf(pp * dp * tp, inter, intra);
         // topology->print();
         auto current = chrono::high_resolution_clock::now();
         cout << "Topology generation Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
@@ -62,8 +74,11 @@ extern "C" {
         //                     );
         workload->topology = topology;
         workload->configureParallelism();   // 1F1B now
+        cout << "wxftest " << 1 << endl;
         workload->placement();
+        cout << "wxftest " << 2 << endl;
         workload->routing(inter, intra);
+        cout << "wxftest " << 3 << endl;
         // workload->print();
         // return 0;
         current = chrono::high_resolution_clock::now();

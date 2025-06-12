@@ -11,7 +11,8 @@ enum NodeType {
     HOST,
     TOR,
     AGG,
-    CORE
+    CORE,
+    GPU
 };
 
 enum RankState {
