@@ -119,6 +119,17 @@ public:
     void printStates() ;
 };
 
+struct SimResult {
+    double globalTime;
+    double pureTpCommTime;
+    double pureTpFwCommTime;
+    double pureTpBwCommTime;
+    double purePpCommTime;
+    double purePpFwCommTime;
+    double purePpBwCommTime;
+    double pureDpCommTime;
+    double pureTotalCommTime;
+};
 
 class Simulator {
 public:
@@ -127,12 +138,20 @@ public:
 
     vector<Task*> tasks;
     double globalTime;
+    double pureTpCommTime;
+    double pureTpFwCommTime;
+    double pureTpBwCommTime;
+    double purePpCommTime;
+    double purePpFwCommTime;
+    double purePpBwCommTime;
+    double pureDpCommTime;
+    double pureTotalCommTime;
 
     void initialize();
     void updateStates(); // waiter filling
     void updateLinkStates(std::set<Flow*>& activeFlows, std::set<Link*>& activeLinks);
     void run() ;
-    float py_run() ;
+    SimResult py_run() ;
 
     void printStates();
     void print() ;

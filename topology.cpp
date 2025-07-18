@@ -243,23 +243,31 @@ void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlin
     }
 }
 
-void Topology::generateSingleMachine(int numGPUs, double nvlink_capacity) {
-    cout << "Generating single machine topology with " << numGPUs << " GPUs and NVLink capacity: " << nvlink_capacity << endl;
+void Topology::generateSingleMachine(int numGPUs, double intra_capacity) {
+    cout << "Generating single machine topology with " << numGPUs << " GPUs and intra-host capacity: " << intra_capacity << endl;
     int nodeId = 0;
 
     // 创建 GPU 节点
     for (int i = 0; i < numGPUs; ++i) {
-        nodes.push_back(new Node(nodeId++, NodeType::HOST)); // 每个 GPU 是一个 HOST 节点
+        nodes.push_back(new Node(nodeId++, NodeType::HOST));
     }
 
     int linkId = 0;
-    // 添加 NVLink 连接（每两个 GPU 之间连接）
+    // 生成双向 NVLink（A→B 和 B→A 各存一个 Link 对象）
     for (int i = 0; i < numGPUs; ++i) {
         for (int j = i + 1; j < numGPUs; ++j) {
-            Link* nvlink = new Link(linkId++, nodes[i], nodes[j], nvlink_capacity, true); // 标记为 NVLink
-            links.push_back(nvlink);
-            nodes[i]->nvlinks.push_back(nvlink); // 存储到 nvlinks
-            nodes[j]->nvlinks.push_back(nvlink); // 存储到 nvlinks
+            Node* src = nodes[i];
+            Node* dst = nodes[j];
+
+            // 创建 A→B
+            Link* link_ab = new Link(linkId++, src, dst, intra_capacity, true);
+            links.push_back(link_ab);
+            src->nvlinks.push_back(link_ab);  // 仅 src 存储 A→B
+
+            // 创建 B→A
+            Link* link_ba = new Link(linkId++, dst, src, intra_capacity, true);
+            links.push_back(link_ba);
+            dst->nvlinks.push_back(link_ba);  // 仅 dst 存储 B→A
         }
     }
 }

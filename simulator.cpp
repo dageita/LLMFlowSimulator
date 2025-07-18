@@ -12,6 +12,7 @@ using namespace std;
 
 extern Topology* topology;
 extern Workload* workload;
+extern Simulator* simulator;
 
 
 Flow::Flow(Connection* connection){
@@ -386,6 +387,21 @@ void Flow::progress(double time){
 
 void Collective::progress(double time){
     for(auto flow : flows){
+        // ver0
+        // double commTime = flow->remainingSize / flow->throughput;
+        // // 累加纯通信时间
+        // switch(group->type) {
+        //     case GroupType::TP:
+        //         simulator->pureTpCommTime += commTime;
+        //         break;
+        //     case GroupType::PP:
+        //         simulator->purePpCommTime += commTime;
+        //         break;
+        //     case GroupType::DP:
+        //         simulator->pureDpCommTime += commTime;
+        //         break;
+        // }
+        // simulator->pureTotalCommTime += commTime; // 总通信时长
         flow->progress(time);
     }
 }
@@ -516,6 +532,48 @@ void Simulator::initialize(){
             RankTask* task = rank->rankTask;
             tuple<int, int, int> event = make_tuple(EndpointType::SENT, GroupType::PP, -workload->microbatches);
             task->events.push_back(event);
+        }
+    }
+
+    // ver1
+    pureTpCommTime = pureTpFwCommTime = pureTpBwCommTime = 0;
+    purePpCommTime = purePpFwCommTime = purePpBwCommTime = 0;
+    pureDpCommTime = pureTotalCommTime = 0;
+
+    for (auto group : workload->groups) {
+        for (auto conn : group->connections) {
+            double commTime = 0;
+            double fwCommTime = 0;
+            double bwCommTime = 0;
+            switch (group->type) {
+                case GroupType::TP:
+                    for (auto link : conn->pathLinks) {
+                        fwCommTime += workload->fwdTPSize / link->capacity;
+                        bwCommTime += workload->bwdTPSize / link->capacity;
+                    }
+                    commTime = fwCommTime + bwCommTime;
+                    pureTpFwCommTime += fwCommTime;
+                    pureTpBwCommTime += bwCommTime;
+                    pureTpCommTime += commTime;
+                    break;
+                case GroupType::PP:
+                    for (auto link : conn->pathLinks) {
+                        fwCommTime += workload->fwdPPSize / link->capacity;
+                        bwCommTime += workload->bwdPPSize / link->capacity;
+                    }
+                    commTime = fwCommTime + bwCommTime;
+                    purePpFwCommTime += fwCommTime;
+                    purePpBwCommTime += bwCommTime;
+                    purePpCommTime += commTime;
+                    break;
+                case GroupType::DP:
+                    for (auto link : conn->pathLinks) {
+                        commTime += workload->dpSize / link->capacity;
+                    }
+                    pureDpCommTime += commTime;
+                    break;
+            }
+            pureTotalCommTime += commTime;
         }
     }
 }
@@ -671,9 +729,11 @@ void Simulator::run(){
     cout << "---------------------------" << endl;
 }
 
-float Simulator::py_run(){
-    globalTime=0;
+SimResult Simulator::py_run(){
     cout << "===========================" << endl;
+
+    globalTime = 0;
+
     int round = 0;
     int targetRound = -1;    
     while(true){
@@ -699,21 +759,24 @@ float Simulator::py_run(){
         if(round==targetRound) printStates(); // !!!!!!!!!!!!!!!
         // stable time
         double time = numeric_limits<double>::infinity();
+
         for(auto task : tasks){
             double t = task->stableTime();
-            if(t < time) time = t;
+            if(t < time) {
+                time = t;
+            }
         }
         // cout << "----------------------------" << endl;
         // cout << "Stable time: " << time << endl;
         if(time == numeric_limits<double>::infinity()){
             break;
         }
+
         // progress
         for(auto task : tasks){
             task->progress(time);
         }
         globalTime += time;
-
         // cout << "Progressed time: " << time << endl;
         // cout << "---------------------------" << endl;
         if(round==targetRound )printStates(); // !!!!!!!!!!!!!!!
@@ -722,6 +785,25 @@ float Simulator::py_run(){
     }
     cout << "Simulation finished" << endl;
     cout << "Global Time: " << globalTime << endl;
+    cout << "TP Pure Communication Time: " << pureTpCommTime << endl;
+    cout << "TP Forward Pure Communication Time: " << pureTpFwCommTime << endl;
+    cout << "TP Backward Pure Communication Time: " << pureTpBwCommTime << endl;
+    cout << "PP Pure Communication Time: " << purePpCommTime << endl;
+    cout << "PP Forward Pure Communication Time: " << purePpFwCommTime << endl;
+    cout << "PP Backward Pure Communication Time: " << purePpBwCommTime << endl;
+    cout << "DP Pure Communication Time: " << pureDpCommTime << endl;
+    cout << "Total Pure Communication Time: " << pureTotalCommTime << endl;
     cout << "---------------------------" << endl;
-    return globalTime;
+
+    SimResult result;
+    result.globalTime = globalTime;
+    result.pureTpCommTime = pureTpCommTime;
+    result.pureTpFwCommTime = pureTpFwCommTime;
+    result.pureTpBwCommTime = pureTpBwCommTime;
+    result.purePpCommTime = purePpCommTime;
+    result.purePpFwCommTime = purePpFwCommTime;
+    result.purePpBwCommTime = purePpBwCommTime;
+    result.pureDpCommTime = pureDpCommTime;
+    result.pureTotalCommTime = pureTotalCommTime;
+    return result;
 }

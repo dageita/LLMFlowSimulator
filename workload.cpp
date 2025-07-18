@@ -300,7 +300,7 @@ void Workload::routing(double inter, double intra) {
             } else if (topology->isSingleMachine) {
                 // Single-machine routing: direct NVLink connection
                 conn->path = {src, dst};
-                for (auto link : src->links) {
+                for (auto link : src->nvlinks) {
                     if (link->dst == dst && link->isNVLink) {
                         conn->pathLinks.push_back(link);
                         break;
