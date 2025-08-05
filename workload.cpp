@@ -261,28 +261,29 @@ void Workload::configureParallelism(){
 
 
 void Workload::placement(){
-    // sort rank 
+    // sort ranks
     sort(ranks.begin(), ranks.end(), [](Rank* a, Rank* b) {
         return a->id < b->id;
     });
 
-    // sort host 
-    vector<Node*> hosts;
+    // 找到所有 GPU 节点
+    vector<Node*> gpus;
     for(auto node : topology->nodes) {
-        if(node->type == NodeType::HOST) {
-            hosts.push_back(node);
+        if(node->type == NodeType::GPU) {
+            gpus.push_back(node);
         }
     }
-    sort(hosts.begin(), hosts.end(), [](Node* a, Node* b) {
+    sort(gpus.begin(), gpus.end(), [](Node* a, Node* b) {
         return a->id < b->id;
     });
-    // mapping
+
+    // 映射 Rank 到 GPU
     for(int i = 0; i < ranks.size(); ++i) {
         Rank* rank = ranks[i];
-        Node* host = hosts[i % hosts.size()];
-        rank->host = host;
-        host->rank = rank;
-        host->ranks.push_back(rank); // Track all ranks on the same host
+        Node* gpu = gpus[i % gpus.size()];
+        rank->host = gpu;         // host 指向 GPU
+        gpu->rank = rank;
+        gpu->ranks.push_back(rank); // Track all ranks on the same GPU
     }
 }
 
@@ -293,27 +294,63 @@ void Workload::routing(double inter, double intra) {
             Node* src = conn->src->host;
             Node* dst = conn->dst->host;
 
-            if (src == dst) {
-                // Intra-host communication (e.g., NVLink)
-                conn->path = {src};
-                conn->pathLinks = {}; // No external links needed
-            } else if (topology->isSingleMachine) {
-                // Single-machine routing: direct NVLink connection
-                conn->path = {src, dst};
+            // 判断是否在同一个 scale-up domain（如同一个 NVLINK_SWITCH 下）
+            if (src->type == NodeType::GPU && dst->type == NodeType::GPU) {
+                bool sameNvSwitch = false;
+                Node* sharedSwitch = nullptr;
+                
+                // 查找共享的NVLink交换机
                 for (auto link : src->nvlinks) {
-                    if (link->dst == dst && link->isNVLink) {
-                        conn->pathLinks.push_back(link);
-                        break;
+                    if (link->dst->type == NodeType::NVLINK_SWITCH) {
+                        for (auto link2 : dst->nvlinks) {
+                            if (link2->dst == link->dst) {
+                                sameNvSwitch = true;
+                                sharedSwitch = link->dst;
+                                break;
+                            }
+                        }
+                        if (sameNvSwitch) break;
+                    }
+                }
+
+                if (sameNvSwitch) {
+                    // 精确选择连接src和dst的链接
+                    conn->path = {src, sharedSwitch, dst};
+                    for (auto link : src->nvlinks) {
+                        if (link->dst == sharedSwitch) {
+                            conn->pathLinks.push_back(link);
+                            break;
+                        }
+                    }
+                    for (auto link : dst->nvlinks) {
+                        if (link->dst == sharedSwitch) {
+                            conn->pathLinks.push_back(link);
+                            break;
+                        }
+                    }
+                } else {
+                    vector<Node*> path = topology->ECMP(src, dst, inter, intra);
+                    conn->path = path;
+                    for (int i = 0; i < path.size() - 1; ++i) {
+                        Node* current = path[i];
+                        Node* next = path[i + 1];
+                        for (auto link : current->links) {
+                            if (link->dst == next) {
+                                conn->pathLinks.push_back(link);
+                                break;
+                            }
+                        }
                     }
                 }
             } else {
-                vector<Node*> path = topology->ECMP(src, dst, inter, intra); // Pass capacity dynamically
+                // 处理非GPU到GPU或其他情况
+                vector<Node*> path = topology->ECMP(src, dst, inter, intra);
                 conn->path = path;
                 for (int i = 0; i < path.size() - 1; ++i) {
-                    Node* src = path[i];
-                    Node* dst = path[i + 1];
-                    for (auto link : src->links) {
-                        if (link->src == src && link->dst == dst) {
+                    Node* current = path[i];
+                    Node* next = path[i + 1];
+                    for (auto link : current->links) {
+                        if (link->dst == next) {
                             conn->pathLinks.push_back(link);
                             break;
                         }

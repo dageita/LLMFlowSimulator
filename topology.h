@@ -22,6 +22,7 @@ public:
     NodeType type;
     vector<Link*> links;  // directed links from Node
     vector<Link*> nvlinks;
+    vector<Link*> pcielinks;
     Node(int id, NodeType type) : id(id), type(type) { rank = nullptr; }
 
     // workload

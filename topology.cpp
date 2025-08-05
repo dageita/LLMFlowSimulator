@@ -245,30 +245,32 @@ void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlin
 
 void Topology::generateSingleMachine(int numGPUs, double intra_capacity) {
     cout << "Generating single machine topology with " << numGPUs << " GPUs and intra-host capacity: " << intra_capacity << endl;
+
     int nodeId = 0;
+    // 创建 NVLink Switch
+    Node* nvlinkSwitch = new Node(nodeId++, NodeType::NVLINK_SWITCH);
+    nodes.push_back(nvlinkSwitch);
 
     // 创建 GPU 节点
+    std::vector<Node*> gpus;
     for (int i = 0; i < numGPUs; ++i) {
-        nodes.push_back(new Node(nodeId++, NodeType::HOST));
+        Node* gpu = new Node(nodeId++, NodeType::GPU);
+        nodes.push_back(gpu);
+        gpus.push_back(gpu);
     }
 
     int linkId = 0;
-    // 生成双向 NVLink（A→B 和 B→A 各存一个 Link 对象）
-    for (int i = 0; i < numGPUs; ++i) {
-        for (int j = i + 1; j < numGPUs; ++j) {
-            Node* src = nodes[i];
-            Node* dst = nodes[j];
-
-            // 创建 A→B
-            Link* link_ab = new Link(linkId++, src, dst, intra_capacity, true);
-            links.push_back(link_ab);
-            src->nvlinks.push_back(link_ab);  // 仅 src 存储 A→B
-
-            // 创建 B→A
-            Link* link_ba = new Link(linkId++, dst, src, intra_capacity, true);
-            links.push_back(link_ba);
-            dst->nvlinks.push_back(link_ba);  // 仅 dst 存储 B→A
-        }
+    // GPU <-> NVLink Switch
+    for (auto gpu : gpus) {
+        Link* link = new Link(linkId++, gpu, nvlinkSwitch, intra_capacity, true);
+        links.push_back(link);
+        gpu->nvlinks.push_back(link);
+        nvlinkSwitch->nvlinks.push_back(link);
+        // 可加反向链路
+        Link* linkBack = new Link(linkId++, nvlinkSwitch, gpu, intra_capacity, true);
+        links.push_back(linkBack);
+        nvlinkSwitch->nvlinks.push_back(linkBack);
+        gpu->nvlinks.push_back(linkBack);
     }
 }
 
@@ -278,9 +280,19 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity, double nvlin
     queue<vector<Node*>> q;
     unordered_set<Node*> visited;
 
-    if (isSingleMachine) {
-        cerr << "Error: ECMP is not applicable for single-machine topology." << endl;
-        return {};
+    // 判断src和dst是否在同一个scale-up domain
+    if (src->type == NodeType::GPU && dst->type == NodeType::GPU) {
+        // 判断是否同一个NVLINK_SWITCH
+        for (auto link : src->nvlinks) {
+            if (link->dst->type == NodeType::NVLINK_SWITCH) {
+                for (auto link2 : dst->nvlinks) {
+                    if (link2->dst == link->dst) {
+                        // 只考虑scale-up链路
+                        return {src, link->dst, dst};
+                    }
+                }
+            }
+        }
     }
 
     // Start BFS from the source node
