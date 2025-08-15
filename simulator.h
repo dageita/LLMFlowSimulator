@@ -30,6 +30,28 @@ class Group;
 class Workload;
 class Topology;
 
+// 全局microbatch状态管理器
+class MicrobatchManager {
+public:
+    struct MicrobatchState {
+        int mb;
+        double globalTime; // 全局microbatch时间
+        double lastComputeEndTime; // 该microbatch最后一个计算事件的结束时间
+        bool hasComputeEvent; // 是否有计算事件
+        
+        MicrobatchState() : mb(0), globalTime(0), lastComputeEndTime(0), hasComputeEvent(false) {}
+        MicrobatchState(int microbatch) : mb(microbatch), globalTime(0), lastComputeEndTime(0), hasComputeEvent(false) {}
+    };
+    
+    static map<int, MicrobatchState> microbatchStates;
+    
+    static void updateMicrobatchGlobalTime(int mb, double time);
+    static double getMicrobatchGlobalTime(int mb);
+    static void updateMicrobatchComputeTime(int mb, double computeEndTime);
+    static double getMicrobatchComputeTime(int mb);
+    static void printStates();
+};
+
 
 class Task {
 public:
@@ -85,12 +107,14 @@ public:
     map<int, Collective*> accumulatingCollectives; // from microbatchId to collective
     unordered_set<int> completedMbs;
     vector<tuple<int, int>> events;    // < From, MB >
+    double groupGlobalTime; // group的全局时间，基于发送和接收方rank的时间
 
     int handleEvents();
     double stableTime();
     void progress(double time);
     void printStates() ;
     void addEvent(int from, int mb);
+    void updateGroupGlobalTime(int mb = 0);
 };
 
 class RankTask : public Task {
@@ -104,17 +128,32 @@ public:
     GroupTask* tpGroupTask;
 
     RankState state;
-    int microbatch;
     double remainingTime;
-    vector<tuple<int, int, int>> events; // < EP, TYPE, MB >
+    double rankGlobalTime; // 每个rank的独立全局时间
+    // 事件结构：< EP, EVENTTYPE, MB, STATE, REMAINING_TIME >
+    vector<tuple<int, int, int, RankState, double>> events;
+
+    int microbatch; // 当前处理的 microbatch（正值表示正向，负值表示反向）
+    set<int> completedFwdMicrobatches;  // 已完成正向的 microbatch
+    set<int> completedBwdMicrobatches;   // 已完成反向的 microbatch
+    
+    // 跟踪上一个处理的事件，用于时间步进决策
+    int lastProcessedMb; // 上一个处理的microbatch
+    bool lastProcessedWasCompute; // 上一个事件是否为计算事件
 
     int handleEvents();
     double stableTime();
     void progress(double time);
     void printStates();
-    void addEvent(int ep, int type, int mb);
+    void addEvent(int ep, int eventType, int mb, RankState state = PP_WAIT, double remainingTime = 0);
     bool isFirstRankInPipeline() const;
     bool isLastRankInPipeline() const;
+    int getNextMicrobatch();
+    bool isAllMicrobatchesDone() const;
+    void updateGlobalState();
+    double calculateNewRankGlobalTime(double time);
+    double calculateHandleEventsTime(int mb, double computeTime);
+    void updateLastProcessedEvent(int mb, bool wasCompute);
 };
 
 struct SimResult {
@@ -148,8 +187,9 @@ public:
     void initialize();
     void updateStates(); // waiter filling
     void updateLinkStates(std::set<Flow*>& activeFlows, std::set<Link*>& activeLinks);
-    void run() ;
-    SimResult py_run() ;
+    bool isSimulationDone();
+    // void run();
+    SimResult py_run();
 
     void printStates();
     void print() ;

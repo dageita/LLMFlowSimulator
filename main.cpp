@@ -182,7 +182,7 @@ int main(int argc, char** argv){
     cout << "Simulator initialization Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
     start = current;
     cout << "--------------------------" << endl;
-    simulator->run();
+    simulator->py_run();
     current = chrono::high_resolution_clock::now();
     cout << "Simulator run Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
     cout << "--------------------------" << endl;

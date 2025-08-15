@@ -78,7 +78,14 @@ void Workload::print(){
     }
 }
 
-
+Rank* Workload::getRankByPP(int pp) const {
+    for (Rank* rank : ranks) {
+        if (rank->pp == pp) {
+            return rank;
+        }
+    }
+    throw std::runtime_error("Rank with pp=" + std::to_string(pp) + " not found");
+}
 
 Workload::Workload(int PP, int DP, int TP, int microbatches, 
     double fwdCompTime, double bwdCompTime, double fwdTPSize, double bwdTPSize, 

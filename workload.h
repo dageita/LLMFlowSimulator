@@ -97,6 +97,8 @@ public:
     map<tuple<int, int>, int> nextMicrobatch;
     void configureParallelism();
 
+    Rank* getRankByPP(int pp) const;
+
     Topology *topology;
     void placement();
     void routing(double inter, double intra);
