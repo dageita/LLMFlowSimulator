@@ -36,19 +36,15 @@ public:
     struct MicrobatchState {
         int mb;
         double globalTime; // 全局microbatch时间
-        double lastComputeEndTime; // 该microbatch最后一个计算事件的结束时间
-        bool hasComputeEvent; // 是否有计算事件
         
-        MicrobatchState() : mb(0), globalTime(0), lastComputeEndTime(0), hasComputeEvent(false) {}
-        MicrobatchState(int microbatch) : mb(microbatch), globalTime(0), lastComputeEndTime(0), hasComputeEvent(false) {}
+        MicrobatchState() : mb(0), globalTime(0) {}
+        MicrobatchState(int microbatch) : mb(microbatch), globalTime(0) {}
     };
     
     static map<int, MicrobatchState> microbatchStates;
     
     static void updateMicrobatchGlobalTime(int mb, double time);
     static double getMicrobatchGlobalTime(int mb);
-    static void updateMicrobatchComputeTime(int mb, double computeEndTime);
-    static double getMicrobatchComputeTime(int mb);
     static void printStates();
 };
 
@@ -125,7 +121,8 @@ public:
     GroupTask* ppFwdGroupTask;
     GroupTask* ppBwdGroupTask;
     GroupTask* dpGroupTask;
-    GroupTask* tpGroupTask;
+    GroupTask* tpFwdGroupTask;
+    GroupTask* tpBwdGroupTask;
 
     RankState state;
     double remainingTime;
@@ -139,7 +136,6 @@ public:
     
     // 跟踪上一个处理的事件，用于时间步进决策
     int lastProcessedMb; // 上一个处理的microbatch
-    bool lastProcessedWasCompute; // 上一个事件是否为计算事件
 
     int handleEvents();
     double stableTime();
@@ -151,9 +147,9 @@ public:
     int getNextMicrobatch();
     bool isAllMicrobatchesDone() const;
     void updateGlobalState();
-    double calculateNewRankGlobalTime(double time);
-    double calculateHandleEventsTime(int mb, double computeTime);
-    void updateLastProcessedEvent(int mb, bool wasCompute);
+    double calculateNewRankGlobalTime(double time, int mb, double eventStartTime);
+    double calculateHandleEventsTime(int mb);
+    void updateLastProcessedMb(int mb);
 };
 
 struct SimResult {

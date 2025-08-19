@@ -13,7 +13,8 @@ using namespace std;
 
 void Rank::print(){
     cout << "Rank ID: " << id << ", TP: " << tp << ", DP: " << dp << ", PP: " << pp;
-    cout << " TP Group ID: " << (tpGroup ? to_string(tpGroup->id) : "None") ;
+    cout << " TP Fwd Group ID: " << (tpFwdGroup ? to_string(tpFwdGroup->id) : "None") ;
+    cout << ", TP Bwd Group ID: " << (tpBwdGroup ? to_string(tpBwdGroup->id) : "None") ;
     cout << ", DP Group ID: " << (dpGroup ? to_string(dpGroup->id) : "None") ;
     cout << ", PP Fwd Group ID: " << (ppFwdGroup ? to_string(ppFwdGroup->id) : "None") ;
     cout << ", PP Bwd Group ID: " << (ppBwdGroup ? to_string(ppBwdGroup->id) : "None") ;    
@@ -134,9 +135,10 @@ Workload::Workload(int PP, int DP, int TP, int microbatches,
         int dp = rank->dp;
         int tp = rank->tp;
 
-        // TP group
+        // TP group (both forward and backward use the same group for now)
         Group* tpGroup = groupMap[make_tuple(pp, dp, -1)];
-        rank->tpGroup = tpGroup;
+        rank->tpFwdGroup = tpGroup;  // TP前向组
+        rank->tpBwdGroup = tpGroup;  // TP后向组（暂时使用同一个组）
         tpGroup->ranks.push_back(rank);
 
         // DP group

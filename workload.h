@@ -29,7 +29,7 @@ public:
     int tp, dp, pp;
     Rank(int id, int pp, int dp, int tp) : id(id), pp(pp), dp(dp), tp(tp) {}
 
-    Group *tpGroup, *ppFwdGroup, *ppBwdGroup, *dpGroup;
+    Group *tpFwdGroup, *tpBwdGroup, *ppFwdGroup, *ppBwdGroup, *dpGroup;
     Node* host;
 
     // simulator related
