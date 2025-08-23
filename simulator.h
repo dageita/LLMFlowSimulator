@@ -37,8 +37,8 @@ public:
         int mb;
         double globalTime; // 全局microbatch时间
         
-        MicrobatchState() : mb(0), globalTime(0) {}
-        MicrobatchState(int microbatch) : mb(microbatch), globalTime(0) {}
+        MicrobatchState() : mb(0), globalTime(0.0) {}
+        MicrobatchState(int microbatch) : mb(microbatch), globalTime(0.0) {}
     };
     
     static map<int, MicrobatchState> microbatchStates;

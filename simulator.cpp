@@ -803,7 +803,7 @@ void RankTask::progress(double time){
                     // 优先触发PP_WAIT，只有在PP<=1时才直接触发COMPUTE
                     if (workload->PP > 1) {
                         eventState = PP_WAIT;
-                        } else {
+                    } else { 
                         eventState = COMPUTE;
                     }
                     eventRemainingTime = 0;
@@ -891,7 +891,7 @@ void RankTask::progress(double time){
             
             // 删除已处理的PP_BWD SENT事件
             it = events.erase(it);
-        } else {
+                    } else {
             ++it;
         }
     }
@@ -955,7 +955,7 @@ double RankTask::calculateNewRankGlobalTime(double time, int mb, double eventSta
         // 同一个microbatch的事件，串行执行
         cout << "[TIME-CALC] Same microbatch (abs: " << abs(mb) << "), serial execution" << endl;
         return rankGlobalTime + time;
-    } else {
+                        } else {
         // 不同microbatch的事件，可以并行
         // 对于TP并行，同一TP组内的rank应该独立推进时间
         // 只有在PP通信时才需要考虑microbatch globalTime进行同步
@@ -997,8 +997,8 @@ void MicrobatchManager::updateMicrobatchGlobalTime(int mb, double time) {
                 cout << "[MICROBATCH-TIME] Global initialized backward microbatch " << mb 
                      << " with forward microbatch " << positiveMb << " time: " << it->second.globalTime << endl;
             }
-        }
-    } else {
+                        }
+                    } else {
         auto it = microbatchStates.find(mb);
         if (it != microbatchStates.end()) {
             cout << "[MICROBATCH-TIME-DEBUG] Microbatch " << mb << " already exists with time=" << it->second.globalTime << endl;
@@ -1024,6 +1024,13 @@ void MicrobatchManager::updateMicrobatchGlobalTime(int mb, double time) {
         it->second.globalTime = newTime;
         cout << "[MICROBATCH-TIME] Global updated microbatch " << mb 
              << " global time from " << currentTime << " to " << newTime << endl;
+        
+        // 验证更新后的值
+        double verifyTime = it->second.globalTime;
+        if (std::isnan(verifyTime) || std::isinf(verifyTime) || verifyTime < 0) {
+            cout << "[MICROBATCH-TIME-ERROR] Invalid value after update: " << verifyTime << " for mb=" << mb << endl;
+            it->second.globalTime = currentTime; // 回滚到原值
+        }
     } else {
         cout << "[MICROBATCH-TIME] Global microbatch " << mb 
              << " time unchanged: " << currentTime << " (requested: " << time << ")" << endl;
@@ -1031,9 +1038,22 @@ void MicrobatchManager::updateMicrobatchGlobalTime(int mb, double time) {
 }
 
 double MicrobatchManager::getMicrobatchGlobalTime(int mb) {
+    cout << "[MICROBATCH-TIME-DEBUG] getMicrobatchGlobalTime called for mb=" << mb << endl;
+    cout << "[MICROBATCH-TIME-DEBUG] microbatchStates.size=" << microbatchStates.size() << endl;
+    
     auto it = microbatchStates.find(mb);
     if (it != microbatchStates.end()) {
-        return it->second.globalTime;
+        double result = it->second.globalTime;
+        cout << "[MICROBATCH-TIME] Global get MicrobatchGlobalTime for mb=" << mb 
+             << ", using mb=" << mb << " time: " << result << endl;
+        
+        // 安全检查返回值
+        if (std::isnan(result) || std::isinf(result) || result < 0) {
+            cout << "[MICROBATCH-TIME-ERROR] Invalid globalTime detected: " << result << " for mb=" << mb << endl;
+            return 0.0;
+        }
+        
+        return result;
     }
     
     // 对于反向microbatch（负数），尝试获取其对应正向microbatch的时间
@@ -1041,7 +1061,7 @@ double MicrobatchManager::getMicrobatchGlobalTime(int mb) {
         int positiveMb = -mb;
         auto positiveIt = microbatchStates.find(positiveMb);
         if (positiveIt != microbatchStates.end()) {
-            cout << "[MICROBATCH-TIME] Global getMicrobatchGlobalTime for backward mb=" << mb 
+            cout << "[MICROBATCH-TIME] Global get MicrobatchGlobalTime for backward mb=" << mb 
                  << ", using forward mb=" << positiveMb << " time: " << positiveIt->second.globalTime << endl;
             return positiveIt->second.globalTime;
         }
@@ -1052,14 +1072,14 @@ double MicrobatchManager::getMicrobatchGlobalTime(int mb) {
         int prevMb = (mb > 0) ? (mb - 1) : (mb + 1);
         auto prevIt = microbatchStates.find(prevMb);
         if (prevIt != microbatchStates.end()) {
-            cout << "[MICROBATCH-TIME] Global getMicrobatchGlobalTime for mb=" << mb 
+            cout << "[MICROBATCH-TIME] Global get MicrobatchGlobalTime for mb=" << mb 
                  << ", using previous mb=" << prevMb << " time: " << prevIt->second.globalTime << endl;
             return prevIt->second.globalTime;
         }
     }
     
     // 如果都没有找到，返回0作为默认值
-    cout << "[MICROBATCH-TIME] Global getMicrobatchGlobalTime failed, mb: " << mb << ", returning 0" << endl;
+    cout << "[MICROBATCH-TIME] Global get MicrobatchGlobalTime failed, mb: " << mb << ", returning 0" << endl;
     return 0.0;
 }
 
@@ -1237,26 +1257,72 @@ double GroupTask::stableTime(){
 }
 
 void GroupTask::progress(double time){
+    cout << "[GROUP-PROGRESS-DEBUG] GroupTask " << group->id << " (" << simulator->groupTypeToString(group->type) 
+         << ") progress called with time=" << time << endl;
+    cout << "[GROUP-PROGRESS-DEBUG] Current state: activeCollective=" << (activeCollective ? "exists" : "null") 
+         << ", waitingCollectives.size=" << waitingCollectives.size() 
+         << ", groupGlobalTime=" << groupGlobalTime << endl;
+    
     // 更新group的全局时间（基于发送和接收方rank的时间）
     // 注意：这里暂时传入0，因为此时可能还没有activeCollective
     // updateGroupGlobalTime(0);
     
     // move waiting to active
     if(activeCollective == nullptr) {
+        cout << "[GROUP-PROGRESS-DEBUG] No active collective, checking waiting queue..." << endl;
         if(!waitingCollectives.empty()) {
             activeCollective = waitingCollectives.front();
             waitingCollectives.erase(waitingCollectives.begin());
+            cout << "[GROUP-PROGRESS-DEBUG] Activated collective for mb=" << activeCollective->microbatch << endl;
+        } else {
+            cout << "[GROUP-PROGRESS-DEBUG] No waiting collectives, returning early" << endl;
         }
     }
-    if(activeCollective == nullptr) 
-        return ;
+    if(activeCollective == nullptr) {
+        cout << "[GROUP-PROGRESS-DEBUG] Still no active collective, returning" << endl;
+        return;
+    }
+    
+    cout << "[GROUP-PROGRESS-DEBUG] Processing active collective for mb=" << activeCollective->microbatch << endl;
+    
+    try {
+        cout << "[GROUP-PROGRESS-DEBUG] Calling activeCollective->progress(" << time << ")" << endl;
+        activeCollective->progress(time);
+        cout << "[GROUP-PROGRESS-DEBUG] Successfully completed activeCollective->progress()" << endl;
+    } catch (const std::exception& e) {
+        cout << "[GROUP-PROGRESS-ERROR] Exception in activeCollective->progress(): " << e.what() << endl;
+        return;
+    } catch (...) {
+        cout << "[GROUP-PROGRESS-ERROR] Unknown exception in activeCollective->progress()" << endl;
+        return;
+    }
 
-    activeCollective->progress(time);
+    // 安全检查activeCollective和flows
+    if (activeCollective == nullptr) {
+        cout << "[GROUP-PROGRESS-ERROR] activeCollective became nullptr after progress()" << endl;
+        return;
+    }
+    
+    if (activeCollective->flows.empty()) {
+        cout << "[GROUP-PROGRESS-ERROR] activeCollective->flows is empty" << endl;
+        return;
+    }
+    
+    if (activeCollective->flows[0] == nullptr) {
+        cout << "[GROUP-PROGRESS-ERROR] activeCollective->flows[0] is nullptr" << endl;
+        return;
+    }
+    
+    cout << "[GROUP-PROGRESS-DEBUG] After collective progress, flows[0]->remainingSize=" 
+         << activeCollective->flows[0]->remainingSize << endl;
 
     if(activeCollective && activeCollective->flows[0]->remainingSize <= 1e-6 ) {   // EP TYPE MB
+        cout << "[GROUP-PROGRESS-DEBUG] Communication completed for mb=" << activeCollective->microbatch << endl;
         
         EventType commType;
         int mb = activeCollective->microbatch;
+        
+        cout << "[GROUP-PROGRESS-DEBUG] Before updateGroupGlobalTime, groupGlobalTime=" << groupGlobalTime << endl;
         
         // 使用正确的microbatch更新group时间
         updateGroupGlobalTime(mb);
@@ -1472,26 +1538,57 @@ void GroupTask::progress(double time){
             }           
         }
 
+        cout << "[GROUP-PROGRESS-DEBUG] Cleaning up completed collective for mb=" << mb << endl;
+        
         delete activeCollective;  
         activeCollective = nullptr;
+        
+        cout << "[GROUP-PROGRESS-DEBUG] After cleanup: waitingCollectives.size=" << waitingCollectives.size() << endl;
+        
         // 优先选择与当前流水线阶段匹配的 microbatch
         if (!waitingCollectives.empty()) {
+            cout << "[GROUP-PROGRESS-DEBUG] Before erase, waitingCollectives.size=" << waitingCollectives.size() << endl;
+            
             int currentDir = mb > 0 ? 1 : -1;
             auto it = find_if(waitingCollectives.begin(), waitingCollectives.end(),
                 [currentDir](Collective* c) { 
                     return (c->microbatch > 0) == (currentDir > 0); 
                 });
             
-            activeCollective = (it != waitingCollectives.end()) ? *it : waitingCollectives.front();
-            waitingCollectives.erase(it);
+            if (it != waitingCollectives.end()) {
+                activeCollective = *it;
+                cout << "[GROUP-PROGRESS-DEBUG] Found matching collective for mb=" << activeCollective->microbatch << endl;
+                waitingCollectives.erase(it);
+                cout << "[GROUP-PROGRESS-DEBUG] Erased matching collective, remaining size=" << waitingCollectives.size() << endl;
+            } else {
+                activeCollective = waitingCollectives.front();
+                cout << "[GROUP-PROGRESS-DEBUG] No matching collective found, using front mb=" << activeCollective->microbatch << endl;
+                waitingCollectives.erase(waitingCollectives.begin());
+                cout << "[GROUP-PROGRESS-DEBUG] Erased front collective, remaining size=" << waitingCollectives.size() << endl;
+            }
+            
+            cout << "[GROUP-PROGRESS-DEBUG] Activated next collective for mb=" << activeCollective->microbatch << endl;
+            
+            // 添加安全检查
+            if (activeCollective == nullptr) {
+                cout << "[GROUP-PROGRESS-ERROR] activeCollective is nullptr after activation!" << endl;
+                return;
+            }
+            
+        } else {
+            cout << "[GROUP-PROGRESS-DEBUG] No more waiting collectives" << endl;
         }
     }
 
 }
 
 void GroupTask::updateGroupGlobalTime(int mb) {
+    cout << "[GROUP-TIME-DEBUG] updateGroupGlobalTime called for group " << group->id 
+         << " with mb=" << mb << endl;
+    
     // 获取microbatch的全局时间作为基础
     double mbGlobalTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
+    cout << "[GROUP-TIME-DEBUG] Retrieved mbGlobalTime=" << mbGlobalTime << endl;
     
     // GroupTask的通信任务只需要考虑发起该通信任务的microbatch globalTime
     double newGroupTime = mbGlobalTime;
@@ -1501,7 +1598,9 @@ void GroupTask::updateGroupGlobalTime(int mb) {
     
     // 更新microbatch的全局时间（如果需要）
     if (mb != 0) {
+        cout << "[GROUP-TIME-DEBUG] Calling MicrobatchManager::updateMicrobatchGlobalTime(" << mb << ", " << newGroupTime << ")" << endl;
         MicrobatchManager::updateMicrobatchGlobalTime(mb, newGroupTime);
+        cout << "[GROUP-TIME-DEBUG] Successfully updated microbatch global time" << endl;
     }
     
     cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
