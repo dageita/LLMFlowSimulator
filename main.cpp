@@ -25,7 +25,7 @@ inter, intra: Bps
 fwdTPSize...: Bytes
 */
 
-
+// microbatches: GAS
 extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, double* globalTime, double* tpComm, double* tpFwComm, double* tpBwComm, double* ppComm, double* ppFwComm, double* ppBwComm, double* dpComm, double* totalComm) {
     // inter, intra 单位 Bps
 
