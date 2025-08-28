@@ -924,7 +924,7 @@ void RankTask::progress(double time){
             
             // 删除已处理的DP_COMM SENT事件
             it = events.erase(it);
-        } else {
+                    } else {
             ++it;
         }
     }
@@ -988,7 +988,7 @@ double RankTask::calculateNewRankGlobalTime(double time, int mb, double eventSta
         // 同一个microbatch的事件，串行执行
         cout << "[TIME-CALC] Same microbatch (abs: " << abs(mb) << "), serial execution" << endl;
         return rankGlobalTime + time;
-    } else {
+                        } else {
         // 不同microbatch的事件，可以并行
         // 对于TP并行，同一TP组内的rank应该独立推进时间
         // 只有在PP通信时才需要考虑microbatch globalTime进行同步
@@ -1325,7 +1325,7 @@ void GroupTask::progress(double time){
     
     try {
         cout << "[GROUP-PROGRESS-DEBUG] Calling activeCollective->progress(" << time << ")" << endl;
-        activeCollective->progress(time);
+    activeCollective->progress(time);
         cout << "[GROUP-PROGRESS-DEBUG] Successfully completed activeCollective->progress()" << endl;
     } catch (const std::exception& e) {
         cout << "[GROUP-PROGRESS-ERROR] Exception in activeCollective->progress(): " << e.what() << endl;
@@ -1587,7 +1587,7 @@ void GroupTask::progress(double time){
         }
 
         cout << "[GROUP-PROGRESS-DEBUG] Cleaning up completed collective for mb=" << mb << endl;
-        
+
         delete activeCollective;  
         activeCollective = nullptr;
         
@@ -1606,7 +1606,7 @@ void GroupTask::progress(double time){
             if (it != waitingCollectives.end()) {
                 activeCollective = *it;
                 cout << "[GROUP-PROGRESS-DEBUG] Found matching collective for mb=" << activeCollective->microbatch << endl;
-                waitingCollectives.erase(it);
+            waitingCollectives.erase(it);
                 cout << "[GROUP-PROGRESS-DEBUG] Erased matching collective, remaining size=" << waitingCollectives.size() << endl;
             } else {
                 activeCollective = waitingCollectives.front();
@@ -2255,34 +2255,7 @@ SimResult Simulator::py_run(){
 
     cout << "Recorded " << timelineEvents.size() << " timeline events\n";
     cout << "# 格式: [rank, event_type, microbatch, start_time, end_time]\n";
-    for (auto& e : timelineEvents) {
-        cout << "    [" << e.rank << ", \"" << simulator->eventTypeToString(e.eventType) << "\", " 
-                << e.microbatch << ", " << e.startTime << ", " << e.endTime << "]";
-                
-        // 如果不是最后一个元素，添加逗号
-        if (&e != &timelineEvents.back()) {
-            cout << ",";
-        }
-        cout << "\n";
-    }
-
-    cout << "Simulation finished" << endl;
-    cout << "Final Global Time: " << finalGlobalTime << endl;
-    // cout << "TP Pure Communication Time: " << pureTpCommTime << endl;
-    // cout << "TP Forward Pure Communication Time: " << pureTpFwCommTime << endl;
-    // cout << "TP Backward Pure Communication Time: " << pureTpBwCommTime << endl;
-    // cout << "PP Pure Communication Time: " << purePpCommTime << endl;
-    // cout << "PP Forward Pure Communication Time: " << purePpFwCommTime << endl;
-    // cout << "PP Backward Pure Communication Time: " << purePpBwCommTime << endl;
-    // cout << "DP Pure Communication Time: " << pureDpCommTime << endl;
-    // cout << "Total Pure Communication Time: " << pureTotalCommTime << endl;
-    cout << "TP Forward Time: " << commStats.tpForward << endl;
-    cout << "TP Backward Time: " << commStats.tpBackward << endl;
-    cout << "PP Forward Time: " << commStats.ppForward << endl;
-    cout << "PP Backward Time: " << commStats.ppBackward << endl;
-    cout << "DP Total Time: " << commStats.dpTotal << endl;
-    cout << "---------------------------" << endl;
-
+    
     SimResult result;
     result.globalTime = finalGlobalTime;
     result.pureTpCommTime = pureTpCommTime;
@@ -2293,6 +2266,43 @@ SimResult Simulator::py_run(){
     result.purePpBwCommTime = purePpBwCommTime;
     result.pureDpCommTime = pureDpCommTime;
     result.pureTotalCommTime = pureTotalCommTime;
+    
+    // 融合打印和收集timeline事件：在遍历过程中同时打印和收集数据
+    for (size_t i = 0; i < timelineEvents.size(); ++i) {
+        const auto& e = timelineEvents[i];
+        
+        // 打印事件信息
+        cout << "    [" << e.rank << ", \"" 
+            << eventTypeToString(e.eventType) 
+            << "\", "        
+            << e.microbatch << ", " 
+            << e.startTime << ", " << e.endTime << "]";
+                
+        // 如果不是最后一个元素，添加逗号
+        if (i < timelineEvents.size() - 1) {
+            cout << ",";
+        }
+        cout << "\n";
+        
+        // 同时收集事件数据到结果中
+        SimResult::TimelineEventData eventData;
+        eventData.rank = e.rank;
+        eventData.eventType = eventTypeToString(e.eventType);
+        eventData.microbatch = e.microbatch;
+        eventData.startTime = e.startTime;
+        eventData.endTime = e.endTime;
+        result.timelineEvents.push_back(eventData);
+    }
+
+    cout << "Simulation finished" << endl;
+    cout << "Final Global Time: " << finalGlobalTime << endl;
+    cout << "TP Forward Time: " << commStats.tpForward << endl;
+    cout << "TP Backward Time: " << commStats.tpBackward << endl;
+    cout << "PP Forward Time: " << commStats.ppForward << endl;
+    cout << "PP Backward Time: " << commStats.ppBackward << endl;
+    cout << "DP Total Time: " << commStats.dpTotal << endl;
+    cout << "---------------------------" << endl;
+
     return result;
 }
 

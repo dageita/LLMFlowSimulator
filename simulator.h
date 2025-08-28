@@ -162,6 +162,16 @@ struct SimResult {
     double purePpBwCommTime;
     double pureDpCommTime;
     double pureTotalCommTime;
+    
+    // Timeline事件列表，每个事件包含 [rank, event_type, microbatch, start_time, end_time]
+    struct TimelineEventData {
+        int rank;
+        string eventType;
+        int microbatch;
+        double startTime;
+        double endTime;
+    };
+    vector<TimelineEventData> timelineEvents;
 };
 
 class Simulator {

@@ -4,12 +4,100 @@
 #include <chrono>
 #include <iostream>
 #include <cstdint>
+#include <cstring>
 
 using namespace std;
 
 Topology* topology = nullptr;
 Workload* workload = nullptr;
 Simulator* simulator = nullptr;
+
+// 设置基本结果参数的辅助函数
+void setBasicResults(const SimResult& resultTime, 
+                    double* globalTime, double* tpComm, double* tpFwComm, double* tpBwComm,
+                    double* ppComm, double* ppFwComm, double* ppBwComm, 
+                    double* dpComm, double* totalComm) {
+    *globalTime = resultTime.globalTime;
+    *tpComm = resultTime.pureTpCommTime;
+    *tpFwComm = resultTime.pureTpFwCommTime;
+    *tpBwComm = resultTime.pureTpBwCommTime;
+    *ppComm = resultTime.purePpCommTime;
+    *ppFwComm = resultTime.purePpFwCommTime;
+    *ppBwComm = resultTime.purePpBwCommTime;
+    *dpComm = resultTime.pureDpCommTime;
+    *totalComm = resultTime.pureTotalCommTime;
+}
+
+// 处理时间线事件的辅助函数
+void processTimelineEvents(const SimResult& resultTime,
+                          int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[],
+                          int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes) {
+    if (timelineEventCount && timelineRanks && timelineEventTypes && timelineMicrobatches && timelineStartTimes && timelineEndTimes) {
+        // 先检查指针是否指向有效内存区域
+        if (timelineEventCount == nullptr) {
+            cout << "[TIMELINE-ERROR] timelineEventCount is NULL, cannot proceed" << endl;
+            return;
+        }
+        
+        // 尝试安全的内存访问
+        try {
+            // 使用 memcpy 安全地写入新值
+            int newValue = resultTime.timelineEvents.size();
+            memcpy(timelineEventCount, &newValue, sizeof(int));
+            
+        } catch (const std::exception& e) {
+            cout << "[TIMELINE-ERROR] Exception while setting timelineEventCount: " << e.what() << endl;
+            cout << "[TIMELINE-ERROR] Skipping timeline event processing due to memory access error" << endl;
+            return;
+        } catch (...) {
+            cout << "[TIMELINE-ERROR] Unknown exception while setting timelineEventCount" << endl;
+            cout << "[TIMELINE-ERROR] Skipping timeline event processing due to memory access error" << endl;
+            return;
+        }
+        
+        for (size_t i = 0; i < resultTime.timelineEvents.size(); ++i) {
+            const auto& event = resultTime.timelineEvents[i];
+            
+            // 安全地复制数据
+            try {
+                timelineRanks[i] = event.rank;
+                timelineMicrobatches[i] = event.microbatch;
+                timelineStartTimes[i] = event.startTime;
+                timelineEndTimes[i] = event.endTime;
+                
+                // 复制事件类型字符串
+                if (timelineEventTypes[i]) {
+                    try {
+                        size_t srcLen = event.eventType.length();
+                        size_t maxLen = 63;  // 保留一个字节给 null 终止符
+                        
+                        if (srcLen > maxLen) {
+                            strncpy(timelineEventTypes[i], event.eventType.c_str(), maxLen);
+                            timelineEventTypes[i][maxLen] = '\0';
+                        } else {
+                            strcpy(timelineEventTypes[i], event.eventType.c_str());
+                        }
+                    } catch (const std::exception& e) {
+                        cout << "[TIMELINE-ERROR] Exception while copying string: " << e.what() << endl;
+                    } catch (...) {
+                        cout << "[TIMELINE-ERROR] Unknown exception while copying string" << endl;
+                    }
+                } else {
+                    cout << "[TIMELINE-WARNING] timelineEventTypes[" << i << "] is NULL, skipping string copy" << endl;
+                }
+                
+            } catch (const std::exception& e) {
+                cout << "[TIMELINE-ERROR] Exception while processing event " << i << ": " << e.what() << endl;
+            } catch (...) {
+                cout << "[TIMELINE-ERROR] Unknown exception while processing event " << i << endl;
+            }
+        }
+        
+        cout << "[TIMELINE] Successfully returned " << *timelineEventCount << " timeline events to Python" << endl;
+    } else {
+        cout << "[TIMELINE-WARNING] Some timeline parameters are NULL, skipping timeline event processing" << endl;
+    }
+}
 
 void printSingleTopologyLinks(const Topology* topology) {
     cout << "Single machine topology links (unidirectional):" << endl;
@@ -26,7 +114,7 @@ fwdTPSize...: Bytes
 */
 
 // microbatches: GAS
-extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, double* globalTime, double* tpComm, double* tpFwComm, double* tpBwComm, double* ppComm, double* ppFwComm, double* ppBwComm, double* dpComm, double* totalComm) {
+extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, double* globalTime, double* tpComm, double* tpFwComm, double* tpBwComm, double* ppComm, double* ppFwComm, double* ppBwComm, double* dpComm, double* totalComm, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes) {
     // inter, intra 单位 Bps
 
     cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << fwdCompTime << " " << bwdCompTime << " " << topology_type << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << " " << dpSize << endl;
@@ -106,15 +194,14 @@ extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, 
     cout << "Simulator run Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
     cout << "--------------------------" << endl;
 
-    *globalTime = resultTime.globalTime;
-    *tpComm = resultTime.pureTpCommTime;
-    *tpFwComm = resultTime.pureTpFwCommTime;
-    *tpBwComm = resultTime.pureTpBwCommTime;
-    *ppComm = resultTime.purePpCommTime;
-    *ppFwComm = resultTime.purePpFwCommTime;
-    *ppBwComm = resultTime.purePpBwCommTime;
-    *dpComm = resultTime.pureDpCommTime;
-    *totalComm = resultTime.pureTotalCommTime;
+    // 设置基本结果参数
+    setBasicResults(resultTime, globalTime, tpComm, tpFwComm, tpBwComm, 
+                   ppComm, ppFwComm, ppBwComm, dpComm, totalComm);
+    
+    // 处理时间线事件数据
+    processTimelineEvents(resultTime, timelineEventCount, timelineRanks, timelineEventTypes,
+                         timelineMicrobatches, timelineStartTimes, timelineEndTimes);
+    
     cout << "------------Success--------------" << endl;
 }
 
