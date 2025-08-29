@@ -238,18 +238,6 @@ int main(int argc, char** argv){
                             0,    // bwdPPSize
                             0     // dpSize
                         );
-    // workload = new Workload(2,      // PP
-    //                         2,      // DP      
-    //                         2,      // TP 
-    //                         5,      // microbatches   
-    //                         0.1,    // fwdCompTime * factor
-    //                         0.1,    // bwdCompTime * factor
-    //                         1.0,    // fwdTPSize
-    //                         1.0,    // bwdTPSize
-    //                         1.0,    // fwdPPSize
-    //                         1.0,    // bwdPPSize
-    //                         1.0     // dpSize
-    //                     );
     workload->topology = topology;
     workload->configureParallelism();   // 1F1B now
     workload->placement();

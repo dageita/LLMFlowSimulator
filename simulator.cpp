@@ -613,6 +613,13 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                             cout << "Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << endl;
                         }
                     }
+
+                    // 纯DP场景（TP<=1, PP<=1, DP>1）：当前FWD完成后，立即调度对应的BWD
+                    if (workload->TP <= 1 && workload->PP <= 1 && workload->DP > 1 && mb <= workload->microbatches) {
+                        pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime);
+                        cout << "[DP-ONLY-1F1B] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
+                             << " after COMPUTE_FWD for mb=" << mb << endl;
+                    }
                 }
                 break;
 
@@ -665,14 +672,22 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                              << " after COMPUTE_BWD scheduling" << endl;
                     }
                     
-                    // 3. 检查是否需要触发DP通信（在最后一个rank完成反向计算后）
-                    // 只有当DP>1且是最后一个rank时才需要DP通信
-                    if (workload->DP > 1 && isLastRankInPipeline()) {
+                    // 3a. 纯DP场景（TP<=1, PP<=1, DP>1）：在非最后一个microbatch时，继续调度下一个FWD
+                    if (workload->TP <= 1 && workload->PP <= 1 && workload->DP > 1) {
+                        int currentAbsMb = std::abs(mb);
+                        if (currentAbsMb < workload->microbatches) {
+                            int nextMb = currentAbsMb + 1;
+                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_FWD, nextMb, COMPUTE, workload->fwdCompTime);
+                            cout << "[DP-ONLY-1F1B] Rank " << rank->id << " scheduled COMPUTE_FWD for mb=" << nextMb
+                                 << " after completing COMPUTE_BWD for mb=" << mb << endl;
+                        }
+                    }
+
+                    // 3b. 检查是否需要触发DP通信（在最后一个rank完成最后一个microbatch的反向计算后）
+                    // 只有当DP>1且是最后一个rank且已完成最后一个microbatch时才需要DP通信
+                    if (workload->DP > 1 && isLastRankInPipeline() && std::abs(mb) == workload->microbatches) {
                         // 最后一个rank完成反向计算后，直接向DP GroupTask添加事件
-                        // 因为1F1B流水线中，最后一个rank完成反向计算意味着所有microbatch都已完成
                         if (dpGroupTask) {
-                            // 使用当前microbatch的绝对值作为DP通信的标识
-                            // 这样可以确保DP通信与具体的microbatch关联，便于时间同步
                             dpGroupTask->addEvent(rank->id, mb);
                             cout << "[DP-SYNC] Last rank " << rank->id << " completed COMPUTE_BWD for mb=" << mb 
                                  << ", added DP communication event to GroupTask " << dpGroupTask->group->id 
@@ -1226,16 +1241,6 @@ int GroupTask::handleEvents(){  // < From, MB >
             evtType = DP_COMM_EVENT;
         }
 
-        // 记录到timelineEvents（发送方提交事件）
-        // simulator->recordTimelineEvent(
-        //     from,                // rank
-        //     group->type,         // GroupType
-        //     EndpointType::SENT,  // 标记为发送端事件
-        //     evtType,             // EventType
-        //     mb,                  // microbatch
-        //     simulator->globalTime, // startTime
-        //     -1                   // endTime（未完成）
-        // );
 
         // 检查是否有等待的集合操作
         if (accumulatingCollectives.find(mb) == accumulatingCollectives.end()) {
@@ -1862,9 +1867,13 @@ void Simulator::initialize() {
             task->rankGlobalTime += workload->fwdCompTime;
             cout << "[INIT-DEBUG] After rankGlobalTime update: " << task->rankGlobalTime << endl;
             
-            // 为所有microbatch预调度计算事件
-            for (int mb = 2; mb <= workload->microbatches; ++mb) {
-                task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime);
+            // 为所有microbatch预调度计算事件：
+            // 仅当存在 TP 或 PP 通信时（需要算/通重叠），才一次性预调度后续 FWD。
+            // 纯 DP 场景（TP<=1 && PP<=1）下不做预调度，按照 1F1B 顺序逐个推进。
+            if (workload->TP > 1 || workload->PP > 1) {
+                for (int mb = 2; mb <= workload->microbatches; ++mb) {
+                    task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime);
+                }
             }
             
             // 为第一个pipeline stage预调度通信事件（TP优先级高于PP）
