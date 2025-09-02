@@ -41,10 +41,20 @@ public:
         MicrobatchState(int microbatch) : mb(microbatch), globalTime(0.0) {}
     };
     
+    // 全局microbatch时间（用于全局同步）
     static map<int, MicrobatchState> microbatchStates;
     
+    // 每个rank的microbatch完成时间（用于PP通信）
+    static map<pair<int, int>, double> rankMicrobatchTimes; // <rank_id, mb> -> time
+    
+    // 全局microbatch时间管理
     static void updateMicrobatchGlobalTime(int mb, double time);
     static double getMicrobatchGlobalTime(int mb);
+    
+    // rank-specific microbatch时间管理
+    static void updateRankMicrobatchTime(int rankId, int mb, double time);
+    static double getRankMicrobatchTime(int rankId, int mb);
+    
     static void printStates();
 };
 
@@ -110,7 +120,7 @@ public:
     void progress(double time);
     void printStates() ;
     void addEvent(int from, int mb);
-    void updateGroupGlobalTime(int mb = 0);
+    void updateGroupGlobalTime(int mb = 0, int fromRank = -1);
 };
 
 class RankTask : public Task {

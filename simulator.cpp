@@ -19,6 +19,7 @@ extern Simulator* simulator;
 
 // 全局microbatch状态管理器的静态成员定义
 map<int, MicrobatchManager::MicrobatchState> MicrobatchManager::microbatchStates;
+map<pair<int, int>, double> MicrobatchManager::rankMicrobatchTimes;
 
 
 Flow::Flow(Connection* connection){
@@ -408,6 +409,8 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     
                     // 更新microbatch的全局时间
                     MicrobatchManager::updateMicrobatchGlobalTime(mb, endTime);
+                    // 更新当前rank的microbatch时间
+                    MicrobatchManager::updateRankMicrobatchTime(rank->id, mb, endTime);
                     // 更新rankGlobalTime为microbatch的最新时间
                     rankGlobalTime = endTime;
                     
@@ -460,28 +463,14 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     remainingTime = workload->bwdCompTime;
                     shouldErase = true;
                     
-                    // 注意：PP通信事件已经在GroupTask::progress中记录，这里不需要重复记录
-                    // 只记录计算开始事件
-                    // 使用智能时间步进计算开始时间和结束时间
-                    double startTime = calculateHandleEventsTime(mb); // 计算开始时间
-                    double endTime = startTime + workload->bwdCompTime; // 计算结束时间
+                    // 关键修复：将COMPUTE_BWD事件添加到pending_events，确保后续处理逻辑能执行
+                    // 注意：不在这里记录COMPUTE_BWD事件或更新时间，这些操作将在COMP_BWD分支中完成
+                    pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, mb, COMPUTE, workload->bwdCompTime);
+                    cout << "[PP_BWD->COMP_BWD] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << mb 
+                         << " after PP_BWD RECV" << endl;
                     
-                    simulator->recordTimelineEvent(
-                        rank->id, NONE_GROUP, NONE_ENDPOINT,
-                        COMPUTE_BWD, mb, startTime, endTime,
-                        "COMPUTE_BWD started after PP_BWD RECV"
-                    );
-                    
-                    // 更新microbatch的全局时间
-                    MicrobatchManager::updateMicrobatchGlobalTime(mb, endTime);
-                    // 更新rankGlobalTime为microbatch的最新时间
-                    rankGlobalTime = endTime;
-                    
-                    // 更新上一个处理的microbatch
-                    updateLastProcessedMb(mb);
-                    
-                        cout << "[STATE] Rank " << rank->id 
-                        << " switched to BACKWARD, microbatch=" << mb << endl;
+                    cout << "[STATE] Rank " << rank->id 
+                    << " switched to BACKWARD, microbatch=" << mb << endl;
                 }
                 else if (ep == EndpointType::SENT) {
                     // 处理PP反向发送事件，通过GroupTask管理通信
@@ -593,6 +582,8 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     
                     // 更新microbatch的全局时间
                     MicrobatchManager::updateMicrobatchGlobalTime(mb, endTime);
+                    // 更新当前rank的microbatch时间
+                    MicrobatchManager::updateRankMicrobatchTime(rank->id, mb, endTime);
                     // 更新rankGlobalTime为microbatch的最新时间
                     rankGlobalTime = endTime;
                     
@@ -604,7 +595,7 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                         // 1. 首先预调度TP_FWD事件（如果TP>1）
                         if (workload->TP > 1) {
                             pending_events.emplace_back(EndpointType::SENT, TP_COMM_FWD, mb, TP_COMM, 0);
-                            cout << "Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << mb << endl;
+                            cout << "Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << endl;
                         }
                         
                         // 2. 然后预调度PP_FWD事件（如果PP>1）
@@ -647,6 +638,8 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     
                     // 更新microbatch的全局时间
                     MicrobatchManager::updateMicrobatchGlobalTime(mb, endTime);
+                    // 更新当前rank的microbatch时间
+                    MicrobatchManager::updateRankMicrobatchTime(rank->id, mb, endTime);
                     // 更新rankGlobalTime为microbatch的最新时间
                     rankGlobalTime = endTime;
                     
@@ -683,15 +676,16 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                         }
                     }
 
-                    // 3b. 检查是否需要触发DP通信（在最后一个rank完成最后一个microbatch的反向计算后）
-                    // 只有当DP>1且是最后一个rank且已完成最后一个microbatch时才需要DP通信
-                    if (workload->DP > 1 && isLastRankInPipeline() && std::abs(mb) == workload->microbatches) {
-                        // 最后一个rank完成反向计算后，直接向DP GroupTask添加事件
+                    // 3b. 检查是否需要触发DP通信
+                    // 在1F1B流水线中，每个rank完成最后一个microbatch的COMP_BWD后，应该触发DP通信
+                    // DP通信是在DP组内进行的，每个rank独立完成自己的计算后参与DP同步
+                    if (workload->DP > 1 && std::abs(mb) == workload->microbatches) {
+                        // 当前rank完成了最后一个microbatch的COMP_BWD，向DP GroupTask添加事件
                         if (dpGroupTask) {
                             dpGroupTask->addEvent(rank->id, mb);
-                            cout << "[DP-SYNC] Last rank " << rank->id << " completed COMPUTE_BWD for mb=" << mb 
+                            cout << "[DP-SYNC] Rank " << rank->id << " completed last microbatch COMP_BWD for mb=" << mb 
                                  << ", added DP communication event to GroupTask " << dpGroupTask->group->id 
-                                 << " for microbatch " << mb << " (gradient sync)" << endl;
+                                 << " (gradient sync within DP group)" << endl;
                         }
                     }
                 }
@@ -917,7 +911,7 @@ void RankTask::progress(double time){
             cout << "[PROGRESS] Processing PP_BWD SENT event for mb=" << mb << endl;
             
             // 通过GroupTask管理PP反向通信，而不是直接添加RECV事件
-            if (ppBwdGroupTask) {
+                        if (ppBwdGroupTask) {
                 // 向GroupTask添加事件，让它管理通信流程
                 ppBwdGroupTask->addEvent(rank->id, mb);
                 cout << "[PROGRESS] Added PP_BWD event to GroupTask " << ppBwdGroupTask->group->id 
@@ -939,7 +933,7 @@ void RankTask::progress(double time){
             
             // 删除已处理的DP_COMM SENT事件
             it = events.erase(it);
-                    } else {
+                    } else { 
             ++it;
         }
     }
@@ -993,6 +987,8 @@ double RankTask::calculateNewRankGlobalTime(double time, int mb, double eventSta
     cout << "[TIME-CALC] Rank " << rank->id << " calculating new global time, current=" << rankGlobalTime 
          << ", time step=" << time << ", mb=" << mb << ", eventStartTime=" << eventStartTime << endl;
     
+    double mbGlobalTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
+
     // 检查事件是否已经完成
     if (eventStartTime + time <= rankGlobalTime) {
         cout << "[TIME-CALC] Event already completed, no time update needed" << endl;
@@ -1001,9 +997,15 @@ double RankTask::calculateNewRankGlobalTime(double time, int mb, double eventSta
     
     if (abs(lastProcessedMb) == abs(mb)) {
         // 同一个microbatch的事件，串行执行
+        // 需要考虑microbatch globalTime和rankGlobalTime的相对大小
+        double startTime = std::max(rankGlobalTime, mbGlobalTime);
         cout << "[TIME-CALC] Same microbatch (abs: " << abs(mb) << "), serial execution" << endl;
-        return rankGlobalTime + time;
-                        } else {
+        cout << "[TIME-CALC] rankGlobalTime=" << rankGlobalTime << ", mbGlobalTime=" << mbGlobalTime 
+             << ", startTime=" << startTime << endl;
+            //  << ", returning " << (startTime + time) << endl;
+        return startTime;
+        // return startTime + time;
+                    } else {
         // 不同microbatch的事件，可以并行
         // 对于TP并行，同一TP组内的rank应该独立推进时间
         // 只有在PP通信时才需要考虑microbatch globalTime进行同步
@@ -1017,12 +1019,10 @@ double RankTask::calculateNewRankGlobalTime(double time, int mb, double eventSta
             // 需要TP或DP通信的rank，独立推进时间，不依赖microbatch globalTime
             cout << "[TIME-CALC] Rank " << rank->id << " needs " 
                  << (needsTPCommunication ? "TP" : "DP") << " communication, independent time progression" << endl;
-            double mbGlobalTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
             cout << "[TIME-CALC] mb: " << abs(mb) << ", mbGlobalTime: " << mbGlobalTime << endl;
             return mbGlobalTime;
         } else {
             // 不需要TP或DP通信的rank，使用microbatch globalTime进行同步
-            double mbGlobalTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
             cout << "[TIME-CALC] mb: " << abs(mb) << ", mbGlobalTime: " << mbGlobalTime << endl;
             double newTime = std::max(rankGlobalTime + time, mbGlobalTime);
             cout << "[TIME-CALC] Different microbatch (abs: " << abs(mb) << " vs " << abs(lastProcessedMb) 
@@ -1051,7 +1051,7 @@ void MicrobatchManager::updateMicrobatchGlobalTime(int mb, double time) {
                      << " with forward microbatch " << positiveMb << " time: " << it->second.globalTime << endl;
             }
                         }
-                    } else {
+                        } else {
         auto it = microbatchStates.find(mb);
         if (it != microbatchStates.end()) {
             cout << "[MICROBATCH-TIME-DEBUG] Microbatch " << mb << " already exists with time=" << it->second.globalTime << endl;
@@ -1083,8 +1083,8 @@ void MicrobatchManager::updateMicrobatchGlobalTime(int mb, double time) {
         if (std::isnan(verifyTime) || std::isinf(verifyTime) || verifyTime < 0) {
             cout << "[MICROBATCH-TIME-ERROR] Invalid value after update: " << verifyTime << " for mb=" << mb << endl;
             it->second.globalTime = currentTime; // 回滚到原值
-        }
-    } else {
+                        }
+                    } else {
         cout << "[MICROBATCH-TIME] Global microbatch " << mb 
              << " time unchanged: " << currentTime << " (requested: " << time << ")" << endl;
     }
@@ -1143,6 +1143,48 @@ void MicrobatchManager::printStates() {
     for (const auto& pair : microbatchStates) {
         cout << "  MB=" << pair.first << ", GlobalTime=" << pair.second.globalTime << endl;
     }
+    
+    cout << "[MICROBATCH-TIME] Rank Microbatch Times:" << endl;
+    for (const auto& pair : rankMicrobatchTimes) {
+        cout << "  Rank=" << pair.first.first << ", MB=" << pair.first.second 
+             << ", Time=" << pair.second << endl;
+    }
+}
+
+// 新增：更新特定rank的microbatch时间
+void MicrobatchManager::updateRankMicrobatchTime(int rankId, int mb, double time) {
+    auto key = make_pair(rankId, mb);
+    auto it = rankMicrobatchTimes.find(key);
+    
+    if (it == rankMicrobatchTimes.end()) {
+        rankMicrobatchTimes[key] = time;
+        cout << "[MICROBATCH-TIME] Created rank microbatch time: Rank=" << rankId 
+             << ", MB=" << mb << ", Time=" << time << endl;
+    } else {
+        double oldTime = it->second;
+        double newTime = std::max(oldTime, time);
+        it->second = newTime;
+        cout << "[MICROBATCH-TIME] Updated rank microbatch time: Rank=" << rankId 
+             << ", MB=" << mb << ", " << oldTime << " -> " << newTime << endl;
+    }
+}
+
+// 新增：获取特定rank的microbatch时间
+double MicrobatchManager::getRankMicrobatchTime(int rankId, int mb) {
+    auto key = make_pair(rankId, mb);
+    auto it = rankMicrobatchTimes.find(key);
+    
+    if (it != rankMicrobatchTimes.end()) {
+        double result = it->second;
+        cout << "[MICROBATCH-TIME] Retrieved rank microbatch time: Rank=" << rankId 
+             << ", MB=" << mb << ", Time=" << result << endl;
+        return result;
+    }
+    
+    // 如果没有找到，返回0作为默认值
+    cout << "[MICROBATCH-TIME] Rank microbatch time not found: Rank=" << rankId 
+         << ", MB=" << mb << ", returning 0" << endl;
+    return 0.0;
 }
 
 
@@ -1367,8 +1409,13 @@ void GroupTask::progress(double time){
         
         cout << "[GROUP-PROGRESS-DEBUG] Before updateGroupGlobalTime, groupGlobalTime=" << groupGlobalTime << endl;
         
-        // 使用正确的microbatch更新group时间
-        updateGroupGlobalTime(mb);
+        // 使用正确的microbatch和发送方rank更新group时间
+        // 从senders中获取发送方rank ID
+        int fromRank = -1;
+        if (!senders.empty()) {
+            fromRank = senders[0]->rank->id;
+        }
+        updateGroupGlobalTime(mb, fromRank);
         
         // 计算通信事件的起止时间
         // 通信事件从现在开始，持续time时间
@@ -1635,31 +1682,29 @@ void GroupTask::progress(double time){
 
 }
 
-void GroupTask::updateGroupGlobalTime(int mb) {
+void GroupTask::updateGroupGlobalTime(int mb, int fromRank) {
     cout << "[GROUP-TIME-DEBUG] updateGroupGlobalTime called for group " << group->id 
-         << " with mb=" << mb << endl;
+         << " with mb=" << mb << " from rank " << fromRank << endl;
     
-    // 获取microbatch的全局时间作为基础
-    double mbGlobalTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
-    cout << "[GROUP-TIME-DEBUG] Retrieved mbGlobalTime=" << mbGlobalTime << endl;
+    // 获取发送方rank的microbatch完成时间（而不是全局microbatch时间）
+    double senderMbTime = MicrobatchManager::getRankMicrobatchTime(fromRank, mb);
+    cout << "[GROUP-TIME-DEBUG] Retrieved sender microbatch time: Rank=" << fromRank 
+         << ", MB=" << mb << ", Time=" << senderMbTime << endl;
     
-    // GroupTask的通信任务只需要考虑发起该通信任务的microbatch globalTime
-    double newGroupTime = mbGlobalTime;
+    // GroupTask的通信任务基于发送方rank的microbatch完成时间
+    double newGroupTime = senderMbTime;
     
     // 更新group的全局时间
     groupGlobalTime = newGroupTime;
     
-    // 更新microbatch的全局时间（如果需要）
-    if (mb != 0) {
-        cout << "[GROUP-TIME-DEBUG] Calling MicrobatchManager::updateMicrobatchGlobalTime(" << mb << ", " << newGroupTime << ")" << endl;
-        MicrobatchManager::updateMicrobatchGlobalTime(mb, newGroupTime);
-        cout << "[GROUP-TIME-DEBUG] Successfully updated microbatch global time" << endl;
-    }
+    // 关键修改：不再调用 MicrobatchManager::updateMicrobatchGlobalTime
+    // 因为这会污染其他DP组的microbatch时间
+    // 只有在真正需要全局同步时才更新全局microbatch时间
     
     cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
          << ") updated global time to " << groupGlobalTime 
-         << " (mbGlobalTime=" << mbGlobalTime 
-         << ", mb=" << mb << ")" << endl;
+         << " (senderMbTime=" << senderMbTime 
+         << ", fromRank=" << fromRank << ", mb=" << mb << ")" << endl;
 }
 
 
@@ -1776,6 +1821,12 @@ void Simulator::initialize() {
     MicrobatchManager::microbatchStates.clear();
     cout << "[INIT] After clearing, microbatchStates size: " << MicrobatchManager::microbatchStates.size() << endl;
     cout << "[INIT] Cleared microbatchStates to prevent global variable pollution" << endl;
+    
+    // 清空rank-specific microbatch时间
+    cout << "[INIT] Before clearing, rankMicrobatchTimes size: " << MicrobatchManager::rankMicrobatchTimes.size() << endl;
+    MicrobatchManager::rankMicrobatchTimes.clear();
+    cout << "[INIT] After clearing, rankMicrobatchTimes size: " << MicrobatchManager::rankMicrobatchTimes.size() << endl;
+    cout << "[INIT] Cleared rankMicrobatchTimes to prevent global variable pollution" << endl;
 
     globalTime = 0;
 
@@ -1863,6 +1914,8 @@ void Simulator::initialize() {
                  << ", total=" << (task->rankGlobalTime + workload->fwdCompTime) << endl;
             // 直接设置microbatch的全局时间，不依赖handleEvents的调用
             MicrobatchManager::updateMicrobatchGlobalTime(1, workload->fwdCompTime);
+            // 同时设置当前rank的microbatch时间
+            MicrobatchManager::updateRankMicrobatchTime(rank->id, 1, workload->fwdCompTime);
             cout << "[INIT-DEBUG] Before rankGlobalTime update: " << task->rankGlobalTime << endl;
             task->rankGlobalTime += workload->fwdCompTime;
             cout << "[INIT-DEBUG] After rankGlobalTime update: " << task->rankGlobalTime << endl;
