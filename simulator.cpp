@@ -107,14 +107,16 @@ void Collective::progress(double time){
     }
 }
 
-void RankTask::addEvent(int ep, int eventType, int mb, RankState state, double remainingTime) {
-    events.emplace_back(ep, eventType, mb, state, remainingTime);
+void RankTask::addEvent(int ep, int eventType, int mb, RankState state, double remainingTime, double startTime, double endTime) {
+    events.emplace_back(ep, eventType, mb, state, remainingTime, startTime, endTime);
     cout << "[RankTask Event Added] Rank=" << rank->id 
             << " | EP=" << simulator->endpointToString(static_cast<EndpointType>(ep))
             << " | EventType=" << simulator->eventTypeToString(static_cast<EventType>(eventType))
             << " | MB=" << mb 
             << " | State=" << simulator->stateToString(state)
             << " | RemainingTime=" << remainingTime
+            << " | StartTime=" << startTime
+            << " | EndTime=" << endTime
             << " | Total Events=" << events.size() << endl;
 }
 
@@ -221,7 +223,7 @@ void RankTask::printStates(){
                 event_str += "DP, ";
                 break;
         }
-        event_str += to_string(get<2>(event)) + ", " + simulator->stateToString(get<3>(event)) + ", " + to_string(get<4>(event)) + ">";
+        event_str += to_string(get<2>(event)) + ", " + simulator->stateToString(get<3>(event)) + ", " + to_string(get<4>(event)) + ", " + to_string(get<5>(event)) + ", " + to_string(get<6>(event)) + ">";
         cout << event_str << " ";
     }
     cout << endl;
@@ -234,6 +236,8 @@ double RankTask::stableTime(){
         int eventType = get<1>(event);
         RankState eventState = get<3>(event);
         double eventRemainingTime = get<4>(event);
+        double eventStartTime = get<5>(event);
+        double eventEndTime = get<6>(event);
         
         if (eventState == COMPUTE && eventRemainingTime > 1e-6) {
             return eventRemainingTime;
@@ -290,6 +294,8 @@ int RankTask::getNextMicrobatch() {
             int ep = get<0>(event);
             int eventType = get<1>(event);
             int mb = get<2>(event);
+            double eventStartTime = get<5>(event);
+            double eventEndTime = get<6>(event);
             if (ep == EndpointType::NONE_ENDPOINT && eventType == COMPUTE_FWD && mb > 0) {
                 cout << "[getNextMicrobatch] Found COMPUTE_FWD event for mb=" << mb << endl;
                 return mb;
@@ -342,18 +348,8 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
     int processed = 0;
     cout << "handleEvents for RankTask: " << rank->id << ", events size: " 
         << events.size() <<  ", microbatch: " << microbatch << endl;
-    
-    // 在handleEvents开始时更新当前microbatch的全局时间
-    // if (microbatch != 0) {
-    //     MicrobatchManager::updateMicrobatchGlobalTime(microbatch, rankGlobalTime);
-    // }
 
-    // for (const auto& event : events) {
-    //     cout << "[Pending Event]: EP=" << simulator->endpointToString(static_cast<EndpointType>(get<0>(event)))
-    //         << ", Type=" << simulator->eventTypeToString(static_cast<EventType>(get<1>(event)))
-    //         << ", MB=" << get<2>(event) << endl;
-    // }
-    std::vector<std::tuple<int, int, int, RankState, double>> pending_events; // 临时存储新事件
+    std::vector<std::tuple<int, int, int, RankState, double, double, double>> pending_events; // 临时存储新事件
 
     for(auto it = events.begin(); it != events.end(); ) {
         int ep = get<0>(*it); // 端点
@@ -361,6 +357,8 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
         int mb = get<2>(*it); // microbatch
         RankState& eventState = get<3>(*it); // 事件状态
         double& eventRemainingTime = get<4>(*it); // 事件剩余时间
+        double& eventStartTime = get<5>(*it); // 事件开始时间
+        double& eventEndTime = get<6>(*it); // 事件结束时间
 
         bool shouldErase = false; // 标记是否应删除该事件
 
@@ -369,18 +367,6 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
             << ", EventType=" << simulator->eventTypeToString(static_cast<EventType>(eventType))
             << ", MB=" << mb 
             << ", CurrentState=" << simulator->stateToString(state) << endl;
-
-        // 为当前处理的事件更新microbatch的全局时间
-        // if (mb != 0) {
-        //     MicrobatchManager::updateMicrobatchGlobalTime(mb, rankGlobalTime);
-        // }
-
-        // 只处理当前 microbatch 或特殊事件
-        // bool isCurrentMB = (mb == microbatch) || (mb == -microbatch) || (mb == 0); // DP事件
-        // if (!isCurrentMB) {
-        //     ++it;
-        //     continue;
-        // }
 
         if (ep == EndpointType::SENT) {
             shouldErase = true;
@@ -401,8 +387,8 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     double startTime = calculateHandleEventsTime(mb); // 计算开始时间
                     double endTime = startTime + workload->fwdCompTime; // 计算结束时间
                     cout << "[HANDLE-EVENTS-DEBUG-PP] startTime=" << startTime << ", endTime=" << endTime << ", workload->fwdCompTime=" << workload->fwdCompTime << endl;
-                    simulator->recordTimelineEvent(
-                        rank->id, NONE_GROUP, NONE_ENDPOINT,
+                        simulator->recordTimelineEvent(
+                            rank->id, NONE_GROUP, NONE_ENDPOINT,
                         COMPUTE_FWD, mb, startTime, endTime,
                         "COMPUTE_FWD started after PP_FWD RECV"
                     );
@@ -419,39 +405,23 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     
                     // 对于最后一个rank，预调度反向计算事件（1F1B流水线）
                     if (isLastRankInPipeline()) {
-                        pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime);
+                        pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
                         cout << "[1F1B] Last rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << (-mb) 
                              << " after PP_FWD RECV for mb=" << mb << endl;
                     }
                 }
                 else if (ep == EndpointType::SENT) {
-                    // 处理PP发送事件
-                    if (isFirstRankInPipeline()) {
-                        // 第一个rank发送完PP通信，准备下一个microbatch的计算
-                        if (mb < workload->microbatches) {
-                            cout << "Rank 0 completed PP send for mb=" << mb << ", scheduling next mb=" << (mb + 1) << endl;
-                            
-                            // 注意：不再在这里预调度PP发送事件，因为已经在COMPUTE_FWD中处理了
-                            // 这里只需要处理状态转换
-                    } else {
-                            // 所有正向批次完成，等待反向批次
-                            shouldErase = false;
-                            cout << "Rank " << rank->id << " all FWD done, waiting for BWD\n";
-                            // 注意：不在这里调用getNextMicrobatch，因为completedFwdMicrobatches还没有更新
-                            // 让progress函数来处理下一个microbatch的获取
-                        }
-                        } else {
-                        // 非第一个rank发送完PP通信，通过GroupTask管理
-                        shouldErase = true;
-                        cout << "Rank " << rank->id << " completed PP send for mb=" << mb << endl;
-                        
-                        // 通过GroupTask管理PP通信，而不是直接添加RECV事件
-                        if (ppFwdGroupTask) {
-                            ppFwdGroupTask->addEvent(rank->id, mb);
-                            cout << "[HANDLE-EVENT] Added PP_FWD event to GroupTask " << ppFwdGroupTask->group->id 
-                                 << " for mb=" << mb << endl;
-                        }
+                    // 处理PP前向发送事件，通过GroupTask管理通信
+                    if (ppFwdGroupTask) {
+                        // 向PP前向GroupTask添加事件，让它管理通信流程
+                        ppFwdGroupTask->addEvent(rank->id, mb);
+                        cout << "[HANDLE-EVENT] Added PP_FWD event to GroupTask " << ppFwdGroupTask->group->id 
+                             << " for mb=" << mb << endl;
                     }
+                    
+                    // PP前向发送完成，可以删除事件
+                    shouldErase = true;
+                    cout << "Rank " << rank->id << " completed PP_FWD send for mb=" << mb << endl;
                 }
                 break;
 
@@ -465,11 +435,11 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     
                     // 关键修复：将COMPUTE_BWD事件添加到pending_events，确保后续处理逻辑能执行
                     // 注意：不在这里记录COMPUTE_BWD事件或更新时间，这些操作将在COMP_BWD分支中完成
-                    pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, mb, COMPUTE, workload->bwdCompTime);
+                    pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, mb, COMPUTE, workload->bwdCompTime, 0, 0);
                     cout << "[PP_BWD->COMP_BWD] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << mb 
                          << " after PP_BWD RECV" << endl;
                     
-                    cout << "[STATE] Rank " << rank->id 
+                        cout << "[STATE] Rank " << rank->id 
                     << " switched to BACKWARD, microbatch=" << mb << endl;
                 }
                 else if (ep == EndpointType::SENT) {
@@ -489,28 +459,24 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
             case TP_COMM_FWD:
             case TP_COMM_BWD:
                 if (ep == EndpointType::RECV) {
-                    // 记录TP通信接收事件
-                    // simulator->recordTimelineEvent(
-                    //     rank->id, GroupType::TP, EndpointType::RECV,
-                    //     static_cast<EventType>(eventType), mb, rankGlobalTime,
-                    //     rankGlobalTime, // TP通信接收是瞬间完成的
-                    //     "TP_COMM received"
-                    // );
-                    
-                    // 更新microbatch的全局时间
-                    MicrobatchManager::updateMicrobatchGlobalTime(mb, rankGlobalTime);
+                    // 使用TP通信事件的结束时间更新microbatch时间
+                    // 如果事件还没有结束时间，使用当前rankGlobalTime
+                    double tpEventEndTime = (eventEndTime > 0) ? eventEndTime : rankGlobalTime;
+                    MicrobatchManager::updateMicrobatchGlobalTime(mb, tpEventEndTime);
+                    // 更新当前rank的microbatch时间
+                    MicrobatchManager::updateRankMicrobatchTime(rank->id, mb, tpEventEndTime);
                     
                     // TP通信接收完成，根据事件类型和PP配置决定后续调度
                     if (eventType == TP_COMM_FWD) {
                         // TP前向通信完成，需要决定后续流程
                         if (workload->PP > 1) {
                             // 存在PP组，触发PP_WAIT
-                            pending_events.emplace_back(EndpointType::SENT, PP_COMM_FWD, mb, PP_WAIT, 0);
+                            pending_events.emplace_back(EndpointType::SENT, PP_COMM_FWD, mb, PP_WAIT, 0, 0, 0);
                             cout << "[TP_FWD->PP] Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb 
                                  << " after TP_FWD RECV (PP>1)" << endl;
                         } else {
                             // 无PP组，直接触发反向计算
-                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime);
+                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
                             cout << "[TP_FWD->COMP_BWD] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << (-mb) 
                                  << " after TP_FWD RECV (PP=1)" << endl;
                         }
@@ -518,7 +484,7 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                         // TP后向通信完成，需要决定后续流程
                         if (workload->PP > 1) {
                             // 存在PP组，触发PP_WAIT
-                            pending_events.emplace_back(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0);
+                            pending_events.emplace_back(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0, 0, 0);
                             cout << "[TP_BWD->PP] Rank " << rank->id << " scheduled PP_COMM_BWD for mb=" << mb 
                                  << " after TP_BWD RECV (PP>1)" << endl;
                         } else {
@@ -594,20 +560,23 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     if (isFirstRankInPipeline()) {
                         // 1. 首先预调度TP_FWD事件（如果TP>1）
                         if (workload->TP > 1) {
-                            pending_events.emplace_back(EndpointType::SENT, TP_COMM_FWD, mb, TP_COMM, 0);
-                            cout << "Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << endl;
+                            pending_events.emplace_back(EndpointType::SENT, TP_COMM_FWD, mb, TP_COMM, 0, 0, 0);
+                            cout << "Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << mb << endl;
                         }
                         
-                        // 2. 然后预调度PP_FWD事件（如果PP>1）
-                        if (workload->PP > 1) {
-                            pending_events.emplace_back(EndpointType::SENT, PP_COMM_FWD, mb, PP_WAIT, 0);
-                            cout << "Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << endl;
+                        // 2. 然后预调度PP_FWD事件（如果PP>1且TP=1）
+                        // 注意：对于TP>1的情况，PP事件将由TP通信完成后触发，不需要在这里预调度
+                        if (workload->PP > 1 && workload->TP <= 1) {
+                            pending_events.emplace_back(EndpointType::SENT, PP_COMM_FWD, mb, PP_WAIT, 0, 0, 0);
+                            cout << "Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << " (TP=1 case)" << endl;
+                        } else if (workload->PP > 1 && workload->TP > 1) {
+                            cout << "Rank " << rank->id << " PP>1 and TP>1: PP_FWD will be triggered by TP_FWD completion for mb=" << mb << endl;
                         }
                     }
 
                     // 纯DP场景（TP<=1, PP<=1, DP>1）：当前FWD完成后，立即调度对应的BWD
                     if (workload->TP <= 1 && workload->PP <= 1 && workload->DP > 1 && mb <= workload->microbatches) {
-                        pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime);
+                        pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
                         cout << "[DP-ONLY-1F1B] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
                              << " after COMPUTE_FWD for mb=" << mb << endl;
                     }
@@ -653,16 +622,19 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     // 1. 首先预调度TP_BWD事件（如果TP>1且不是从TP_BWD转换来的）
                     if (workload->TP > 1 && mb < 0) {
                         // 反向计算完成后才触发TP_BWD（mb < 0表示反向microbatch）
-                        pending_events.emplace_back(EndpointType::SENT, TP_COMM_BWD, mb, TP_COMM, 0);
+                        pending_events.emplace_back(EndpointType::SENT, TP_COMM_BWD, mb, TP_COMM, 0, 0, 0);
                         cout << "[1F1B] Rank " << rank->id << " scheduled TP_BWD SENT for mb=" << mb 
                              << " after COMPUTE_BWD scheduling" << endl;
                     }
                     
-                    // 2. 然后预调度PP_BWD事件（如果PP>1且不是第一个rank）
-                    if (workload->PP > 1 && !isFirstRankInPipeline()) {
-                        pending_events.emplace_back(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0);
+                    // 2. 然后预调度PP_BWD事件（如果PP>1且TP=1且不是第一个rank）
+                    // 注意：对于TP>1的情况，PP_BWD事件将由TP_BWD完成后触发，不需要在这里预调度
+                    if (workload->PP > 1 && workload->TP <= 1 && !isFirstRankInPipeline()) {
+                        pending_events.emplace_back(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0, 0, 0);
                         cout << "[1F1B] Rank " << rank->id << " scheduled PP_BWD SENT for mb=" << mb 
-                             << " after COMPUTE_BWD scheduling" << endl;
+                             << " after COMPUTE_BWD scheduling (TP=1 case)" << endl;
+                    } else if (workload->PP > 1 && workload->TP > 1 && !isFirstRankInPipeline()) {
+                        cout << "[1F1B] PP>1 and TP>1: PP_BWD will be triggered by TP_BWD completion for rank " << rank->id << endl;
                     }
                     
                     // 3a. 纯DP场景（TP<=1, PP<=1, DP>1）：在非最后一个microbatch时，继续调度下一个FWD
@@ -670,7 +642,7 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                         int currentAbsMb = std::abs(mb);
                         if (currentAbsMb < workload->microbatches) {
                             int nextMb = currentAbsMb + 1;
-                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_FWD, nextMb, COMPUTE, workload->fwdCompTime);
+                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_FWD, nextMb, COMPUTE, workload->fwdCompTime, 0, 0);
                             cout << "[DP-ONLY-1F1B] Rank " << rank->id << " scheduled COMPUTE_FWD for mb=" << nextMb
                                  << " after completing COMPUTE_BWD for mb=" << mb << endl;
                         }
@@ -717,13 +689,15 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
             ++it;
         }
     }
-    for (auto& [ep, type, mb, state, remainingTime] : pending_events) {
-        addEvent(ep, type, mb, state, remainingTime);
+    for (auto& [ep, type, mb, state, remainingTime, startTime, endTime] : pending_events) {
+        addEvent(ep, type, mb, state, remainingTime, startTime, endTime);
         cout << "[PENDING] Added event: EP=" << simulator->endpointToString(static_cast<EndpointType>(ep)) 
             << ", Type=" << simulator->eventTypeToString(static_cast<EventType>(type)) 
             << ", MB=" << mb 
             << ", State=" << simulator->stateToString(state) 
-            << ", RemainingTime=" << remainingTime << endl;
+            << ", RemainingTime=" << remainingTime 
+            << ", StartTime=" << startTime
+            << ", EndTime=" << endTime << endl;
     }
     
     return processed;
@@ -733,33 +707,83 @@ void RankTask::progress(double time){
     cout << "[PROGRESS] Rank " << rank->id << " starting progress, events size=" << events.size() 
          << ", rankGlobalTime=" << rankGlobalTime << ", time step=" << time << endl;
     
-    // 遍历所有事件，为每个microbatch更新状态
-    for (auto& event : events) {
+    // 统一处理所有事件：状态更新和通信管理
+    for (auto it = events.begin(); it != events.end(); ) {
+        auto& event = *it;
         int ep = get<0>(event);
         int eventType = get<1>(event);
         int mb = get<2>(event);
         RankState& eventState = get<3>(event);
         double& eventRemainingTime = get<4>(event);
+        double& eventStartTime = get<5>(event);
+        double& eventEndTime = get<6>(event);
         
         cout << "[PROGRESS] Processing event: EP=" << simulator->endpointToString(static_cast<EndpointType>(ep)) 
             << ", Type=" << simulator->eventTypeToString(static_cast<EventType>(eventType)) 
             << ", MB=" << mb 
-            << ", State=" << simulator->stateToString(eventState) 
+            << ", eventState=" << simulator->stateToString(eventState) 
             << ", RemainingTime=" << eventRemainingTime << endl;
         
+        // 处理SENT类型的通信事件（通过GroupTask管理）
+        if (ep == EndpointType::SENT) {
+            bool shouldErase = false;
+            
+            if (eventType == TP_COMM_FWD) {
+                cout << "[PROGRESS] Processing TP_FWD SENT event for mb=" << mb << endl;
+                if (tpFwdGroupTask) {
+                    tpFwdGroupTask->addEvent(rank->id, mb);
+                    cout << "[PROGRESS] Added TP_FWD event to GroupTask " << tpFwdGroupTask->group->id << " for mb=" << mb << endl;
+                }
+                shouldErase = true;
+            } else if (eventType == TP_COMM_BWD) {
+                cout << "[PROGRESS] Processing TP_BWD SENT event for mb=" << mb << endl;
+                if (tpBwdGroupTask) {
+                    tpBwdGroupTask->addEvent(rank->id, mb);
+                    cout << "[PROGRESS] Added TP_BWD event to GroupTask " << tpBwdGroupTask->group->id << " for mb=" << mb << endl;
+                }
+                shouldErase = true;
+            } else if (eventType == PP_COMM_FWD) {
+                cout << "[PROGRESS] Processing PP_FWD SENT event for mb=" << mb << endl;
+                if (ppFwdGroupTask) {
+                    ppFwdGroupTask->addEvent(rank->id, mb);
+                    cout << "[PROGRESS] Added PP_FWD event to GroupTask " << ppFwdGroupTask->group->id << " for mb=" << mb << endl;
+                }
+                shouldErase = true;
+            } else if (eventType == PP_COMM_BWD) {
+                cout << "[PROGRESS] Processing PP_BWD SENT event for mb=" << mb << endl;
+                if (ppBwdGroupTask) {
+                    ppBwdGroupTask->addEvent(rank->id, mb);
+                    cout << "[PROGRESS] Added PP_BWD event to GroupTask " << ppBwdGroupTask->group->id << " for mb=" << mb << endl;
+                }
+                shouldErase = true;
+            } else if (eventType == DP_COMM_EVENT) {
+                cout << "[PROGRESS] Processing DP_COMM SENT event for gradient sync" << endl;
+                if (dpGroupTask) {
+                                dpGroupTask->addEvent(rank->id, 0);
+                    cout << "[PROGRESS] Added DP_COMM event to GroupTask " << dpGroupTask->group->id << " for gradient sync" << endl;
+                }
+                shouldErase = true;
+            }
+            
+            if (shouldErase) {
+                it = events.erase(it);
+                continue;
+            }
+        }
+        
         // 从timelineEvents中查找当前事件的startTime
-        double eventStartTime = rankGlobalTime; // 默认使用当前rankGlobalTime
+        double timelineEventStartTime = rankGlobalTime; // 默认使用当前rankGlobalTime
         for (const auto& timelineEvent : simulator->timelineEvents) {
             if (timelineEvent.rank == rank->id && 
                 timelineEvent.microbatch == mb && 
                 timelineEvent.eventType == static_cast<EventType>(eventType)) {
-                eventStartTime = timelineEvent.startTime;
+                timelineEventStartTime = timelineEvent.startTime;
                 break;
             }
         }
         
         // 智能时间步进：根据microbatch并行性决定时间更新策略
-        double newRankGlobalTime = calculateNewRankGlobalTime(time, mb, eventStartTime);
+        double newRankGlobalTime = calculateNewRankGlobalTime(time, mb, timelineEventStartTime);
         if (newRankGlobalTime > rankGlobalTime) {
             cout << "[PROGRESS] Rank " << rank->id << " time update: " << rankGlobalTime << " -> " << newRankGlobalTime << endl;
             rankGlobalTime = newRankGlobalTime;
@@ -778,7 +802,7 @@ void RankTask::progress(double time){
                 if (eventRemainingTime <= 1e-6) {
                     // 计算完成
                     cout << "[PROGRESS] Rank " << rank->id << " completed computation for mb=" << mb 
-                         << " at rankGlobalTime=" << rankGlobalTime << endl;
+                        << " at rankGlobalTime=" << rankGlobalTime << endl;
                     
                     if (mb < 0) {  // 反向计算完成
                         completedBwdMicrobatches.insert(mb);
@@ -788,9 +812,9 @@ void RankTask::progress(double time){
                         // 对于最后一个rank，反向计算完成后需要发送PP_BWD
                         if (isLastRankInPipeline()) {
                             // 预调度PP_BWD发送事件
-                            addEvent(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0);
+                            addEvent(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0, 0, 0);
                             cout << "[1F1B] Last rank " << rank->id << " scheduled PP_BWD SENT for mb=" << mb 
-                                 << " after COMPUTE_BWD completion" << endl;
+                                << " after COMPUTE_BWD completion" << endl;
                     }
                 } else {  // 正向计算完成
                         completedFwdMicrobatches.insert(mb);
@@ -808,15 +832,14 @@ void RankTask::progress(double time){
                     }
                 }
                 break;
-                
+                    
             case PP_WAIT:
                 // 处理PP等待状态，包括DP通信的接收
                 if (eventType == PP_COMM_FWD && ep == EndpointType::RECV) {
                     // 接收到PP通信，开始计算
                     eventState = COMPUTE;
                     eventRemainingTime = workload->fwdCompTime;
-                    cout << "[PROGRESS] Rank " << rank->id << " starting COMPUTE_FWD for mb=" << mb 
-                         << " at rankGlobalTime=" << rankGlobalTime << endl;
+                    cout << "[PROGRESS] Rank " << rank->id << " starting COMPUTE_FWD for mb=" << mb << " at rankGlobalTime=" << rankGlobalTime << endl;
                 } else if (eventType == DP_COMM_EVENT && ep == EndpointType::RECV) {
                     // 接收到DP通信，进入DONE状态
                     eventState = DONE;
@@ -832,111 +855,31 @@ void RankTask::progress(double time){
                     // 优先触发PP_WAIT，只有在PP<=1时才直接触发COMPUTE
                     if (workload->PP > 1) {
                         eventState = PP_WAIT;
-                    } else { 
+                        } else {
                         eventState = COMPUTE;
                     }
                     eventRemainingTime = 0;
                     
                     cout << "[PROGRESS] Rank " << rank->id << " TP communication completed for mb=" << mb 
-                         << ", state changed to " << simulator->stateToString(eventState) << endl;
+                            << ", state changed to " << simulator->stateToString(eventState) << endl;
                     
-                    // TP通信完成后，根据新状态调度后续事件
-                    if (eventState == PP_WAIT) {
-                        // PP>1，TP通信完成后需要PP通信
-                        if (mb > 0) {
-                            addEvent(EndpointType::SENT, PP_COMM_FWD, mb, PP_WAIT, 0);
-                            cout << "[TP->PP] Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << " after TP communication" << endl;
-                    } else {
-                            addEvent(EndpointType::SENT, PP_COMM_BWD, mb, PP_WAIT, 0);
-                            cout << "[TP->PP] Rank " << rank->id << " scheduled PP_COMM_BWD for mb=" << mb << " after TP communication" << endl;
-                        }
-                    }
-                    // 注意：如果eventState == COMPUTE，说明PP<=1，TP通信完成后不需要调度新的计算事件
-                    // 因为相应的计算事件应该已经存在于事件队列中，或者会由其他机制触发
+                    // 注意：PP通信事件的调度已经在handleEvents中完成，这里不需要重复添加
+                    // 避免重复添加事件：handleEvents负责调度，progress负责状态更新
+                    cout << "[PROGRESS] Rank " << rank->id << " TP communication state updated, PP events already scheduled in handleEvents" << endl;
                 }
                 break;
-                
+                    
             default:
                 break;
         }
+        
+        ++it;
     }
     
-    // 处理通信发送事件，通过GroupTask管理通信
-    for (auto it = events.begin(); it != events.end(); ) {
-        int ep = get<0>(*it);
-        int eventType = get<1>(*it);
-        int mb = get<2>(*it);
-        RankState eventState = get<3>(*it);
+    // 注意：SENT类型的事件处理已经合并到上面的统一循环中
+
         
-        if (eventType == TP_COMM_FWD && ep == EndpointType::SENT) {
-            cout << "[PROGRESS] Processing TP_FWD SENT event for mb=" << mb << endl;
-            
-            // 通过GroupTask管理TP前向通信，而不是直接添加RECV事件
-            if (tpFwdGroupTask) {
-                // 向GroupTask添加事件，让它管理通信流程
-                tpFwdGroupTask->addEvent(rank->id, mb);
-                cout << "[PROGRESS] Added TP_FWD event to GroupTask " << tpFwdGroupTask->group->id 
-                     << " for mb=" << mb << endl;
-            }
-            
-            // 删除已处理的TP_FWD SENT事件
-            it = events.erase(it);
-        } else if (eventType == TP_COMM_BWD && ep == EndpointType::SENT) {
-            cout << "[PROGRESS] Processing TP_BWD SENT event for mb=" << mb << endl;
-            
-            // 通过GroupTask管理TP后向通信，而不是直接添加RECV事件
-            if (tpBwdGroupTask) {
-                // 向GroupTask添加事件，让它管理通信流程
-                tpBwdGroupTask->addEvent(rank->id, mb);
-                cout << "[PROGRESS] Added TP_BWD event to GroupTask " << tpBwdGroupTask->group->id 
-                     << " for mb=" << mb << endl;
-            }
-            
-            // 删除已处理的TP_BWD SENT事件
-            it = events.erase(it);
-        } else if (eventType == PP_COMM_FWD && ep == EndpointType::SENT) {
-            cout << "[PROGRESS] Processing PP_FWD SENT event for mb=" << mb << endl;
-            
-            // 通过GroupTask管理PP通信，而不是直接添加RECV事件
-                        if (ppFwdGroupTask) {
-                // 向GroupTask添加事件，让它管理通信流程
-                ppFwdGroupTask->addEvent(rank->id, mb);
-                cout << "[PROGRESS] Added PP_FWD event to GroupTask " << ppFwdGroupTask->group->id 
-                     << " for mb=" << mb << endl;
-            }
-            
-            // 删除已处理的PP_FWD SENT事件
-            it = events.erase(it);
-        } else if (eventType == PP_COMM_BWD && ep == EndpointType::SENT) {
-            cout << "[PROGRESS] Processing PP_BWD SENT event for mb=" << mb << endl;
-            
-            // 通过GroupTask管理PP反向通信，而不是直接添加RECV事件
-                        if (ppBwdGroupTask) {
-                // 向GroupTask添加事件，让它管理通信流程
-                ppBwdGroupTask->addEvent(rank->id, mb);
-                cout << "[PROGRESS] Added PP_BWD event to GroupTask " << ppBwdGroupTask->group->id 
-                     << " for mb=" << mb << endl;
-            }
-            
-            // 删除已处理的PP_BWD SENT事件
-            it = events.erase(it);
-        } else if (eventType == DP_COMM_EVENT && ep == EndpointType::SENT) {
-            cout << "[PROGRESS] Processing DP_COMM SENT event for gradient sync" << endl;
-            
-            // 通过GroupTask管理DP通信，而不是直接添加RECV事件
-            if (dpGroupTask) {
-                // 向GroupTask添加事件，让它管理通信流程
-                dpGroupTask->addEvent(rank->id, 0); // DP通信使用mb=0表示梯度同步
-                cout << "[PROGRESS] Added DP_COMM event to GroupTask " << dpGroupTask->group->id 
-                     << " for gradient sync" << endl;
-            }
-            
-            // 删除已处理的DP_COMM SENT事件
-            it = events.erase(it);
-                    } else { 
-            ++it;
-        }
-    }
+  
     
     // 更新全局状态（选择最优先的microbatch）
     updateGlobalState();
@@ -952,6 +895,8 @@ void RankTask::updateGlobalState() {
         int mb = get<2>(event);
         RankState eventState = get<3>(event);
         double eventRemainingTime = get<4>(event);
+        double eventStartTime = get<5>(event);
+        double eventEndTime = get<6>(event);
         
         // 计算优先级：COMPUTE > TP_COMM > PP_WAIT
         int currentPriority = 0;
@@ -1034,7 +979,7 @@ double RankTask::calculateNewRankGlobalTime(double time, int mb, double eventSta
 
 // MicrobatchManager的静态方法实现
 void MicrobatchManager::updateMicrobatchGlobalTime(int mb, double time) {
-    cout << "[MICROBATCH-TIME-DEBUG] updateMicrobatchGlobalTime called: mb=" << mb << ", time=" << time << endl;
+    cout << "[MICROBATCH-TIME-DEBUG] update MicrobatchGlobalTime called: mb=" << mb << ", time=" << time << endl;
     
     // 确保microbatch状态存在
     if (microbatchStates.find(mb) == microbatchStates.end()) {
@@ -1350,7 +1295,6 @@ void GroupTask::progress(double time){
     
     // 更新group的全局时间（基于发送和接收方rank的时间）
     // 注意：这里暂时传入0，因为此时可能还没有activeCollective
-    // updateGroupGlobalTime(0);
     
     // move waiting to active
     if(activeCollective == nullptr) {
@@ -1407,7 +1351,7 @@ void GroupTask::progress(double time){
         EventType commType;
         int mb = activeCollective->microbatch;
         
-        cout << "[GROUP-PROGRESS-DEBUG] Before updateGroupGlobalTime, groupGlobalTime=" << groupGlobalTime << endl;
+        cout << "[GROUP-PROGRESS-DEBUG] Before update GroupGlobalTime, groupGlobalTime=" << groupGlobalTime << endl;
         
         // 使用正确的microbatch和发送方rank更新group时间
         // 从senders中获取发送方rank ID
@@ -1603,7 +1547,7 @@ void GroupTask::progress(double time){
                     // 更新microbatch的全局时间
                     MicrobatchManager::updateMicrobatchGlobalTime(mb, endTime);
                     
-                    rankTask->addEvent(EndpointType::RECV, commType, mb, TP_COMM, 0);
+                    rankTask->addEvent(EndpointType::RECV, commType, mb, TP_COMM, 0, startTime, endTime);
                     cout << "[DEBUG] Added TP RECV event for rank " << rankTask->rank->id << endl;
                 } else {
                     cout << "[DEBUG] Skipped duplicate TP RECV event for rank " << rankTask->rank->id << endl;
@@ -1633,7 +1577,7 @@ void GroupTask::progress(double time){
                     // 更新microbatch的全局时间
                     MicrobatchManager::updateMicrobatchGlobalTime(mb, endTime);
                     
-                    rankTask->addEvent(EndpointType::RECV, commType, mb, PP_WAIT, 0);
+                    rankTask->addEvent(EndpointType::RECV, commType, mb, PP_WAIT, 0, startTime, endTime);
                 }           
             }           
         }
@@ -1683,7 +1627,7 @@ void GroupTask::progress(double time){
 }
 
 void GroupTask::updateGroupGlobalTime(int mb, int fromRank) {
-    cout << "[GROUP-TIME-DEBUG] updateGroupGlobalTime called for group " << group->id 
+    cout << "[GROUP-TIME-DEBUG] update GroupGlobalTime called for group " << group->id 
          << " with mb=" << mb << " from rank " << fromRank << endl;
     
     // 获取发送方rank的microbatch完成时间（而不是全局microbatch时间）
@@ -1696,10 +1640,6 @@ void GroupTask::updateGroupGlobalTime(int mb, int fromRank) {
     
     // 更新group的全局时间
     groupGlobalTime = newGroupTime;
-    
-    // 关键修改：不再调用 MicrobatchManager::updateMicrobatchGlobalTime
-    // 因为这会污染其他DP组的microbatch时间
-    // 只有在真正需要全局同步时才更新全局microbatch时间
     
     cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
          << ") updated global time to " << groupGlobalTime 
@@ -1909,7 +1849,7 @@ void Simulator::initialize() {
                 "Initial fwd compute"
             );
             // 同步更新 microbatch(1) 的全局时间与 rank 的时间
-            cout << "[INIT-DEBUG] Before updateMicrobatchGlobalTime: task->rankGlobalTime=" << task->rankGlobalTime 
+            cout << "[INIT-DEBUG] Before update MicrobatchGlobalTime: task->rankGlobalTime=" << task->rankGlobalTime 
                  << ", workload->fwdCompTime=" << workload->fwdCompTime 
                  << ", total=" << (task->rankGlobalTime + workload->fwdCompTime) << endl;
             // 直接设置microbatch的全局时间，不依赖handleEvents的调用
@@ -1925,7 +1865,7 @@ void Simulator::initialize() {
             // 纯 DP 场景（TP<=1 && PP<=1）下不做预调度，按照 1F1B 顺序逐个推进。
             if (workload->TP > 1 || workload->PP > 1) {
                 for (int mb = 2; mb <= workload->microbatches; ++mb) {
-                    task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime);
+                    task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime, 0, 0);
                 }
             }
             
@@ -1933,7 +1873,7 @@ void Simulator::initialize() {
             // 1. 首先预调度TP_FWD事件（如果TP>1）
             if (workload->TP > 1) {
                 // 预调度第一个TP发送事件（在计算完成后触发）
-                task->addEvent(EndpointType::SENT, EventType::TP_COMM_FWD, 1, TP_COMM, 0);
+                task->addEvent(EndpointType::SENT, EventType::TP_COMM_FWD, 1, TP_COMM, 0, 0, 0);
                 
                 // 注意：不在这里预调度GroupTask事件，而是在RankTask::handleEvents中处理
                 cout << "[INIT] Pre-scheduled TP_FWD SENT event for rank " << rank->id << " (GroupTask event will be added later)" << endl;
@@ -1941,24 +1881,27 @@ void Simulator::initialize() {
                 cout << "[INIT] TP=1, no tensor parallelism communication needed for rank " << rank->id << endl;
             }
             
-            // 2. 然后预调度PP_FWD事件（如果PP>1）
-            if (workload->PP > 1) {
+            // 2. 然后预调度PP_FWD事件（如果PP>1且TP=1）
+            // 注意：对于TP>1的情况，PP事件将由TP通信完成后触发，不需要在这里预调度
+            if (workload->PP > 1 && workload->TP <= 1) {
                 // 预调度第一个PP发送事件（在计算完成后触发）
-                task->addEvent(EndpointType::SENT, EventType::PP_COMM_FWD, 1, PP_WAIT, 0);
+                task->addEvent(EndpointType::SENT, EventType::PP_COMM_FWD, 1, PP_WAIT, 0, 0, 0);
                 
                 // 为下一个rank预调度对应的RECV事件，通过GroupTask管理
-                if (rank->ppFwdGroup != nullptr && rank->ppFwdGroup->groupTask != nullptr) {
-                    rank->ppFwdGroup->groupTask->addEvent(rank->id, 1);
-                    cout << "[INIT] Pre-scheduled PP_FWD event to GroupTask " << rank->ppFwdGroup->id 
-                         << " for mb=1 (from rank " << rank->id << ")" << endl;
-                }
+                // if (rank->ppFwdGroup != nullptr && rank->ppFwdGroup->groupTask != nullptr) {
+                //     rank->ppFwdGroup->groupTask->addEvent(rank->id, 1);
+                //     cout << "[INIT] Pre-scheduled PP_FWD event to GroupTask " << rank->ppFwdGroup->id 
+                //          << " for mb=1 (from rank " << rank->id << ")" << endl;
+                // }
+            } else if (workload->PP > 1 && workload->TP > 1) {
+                cout << "[INIT] PP>1 and TP>1: PP events will be triggered by TP communication completion for rank " << rank->id << endl;
             } else {
                 cout << "[INIT] PP=1, no pipeline communication needed for rank " << rank->id << endl;
             }
 
             // 纯DP场景（TP=1, PP=1, DP>1）：在首个FWD后预调度首个BWD，保证DP-only流程可运行
             if (workload->TP <= 1 && workload->PP <= 1 && workload->DP > 1) {
-                task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, -1, COMPUTE, workload->bwdCompTime);
+                task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, -1, COMPUTE, workload->bwdCompTime, 0, 0);
                 cout << "[INIT] DP-only path: pre-scheduled COMPUTE_BWD for mb=-1 on rank " << rank->id << endl;
             }
             

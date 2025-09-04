@@ -137,8 +137,8 @@ public:
     RankState state;
     double remainingTime;
     double rankGlobalTime; // 每个rank的独立全局时间
-    // 事件结构：< EP, EVENTTYPE, MB, STATE, REMAINING_TIME >
-    vector<tuple<int, int, int, RankState, double>> events;
+    // 事件结构：< EP, EVENTTYPE, MB, STATE, REMAINING_TIME, START_TIME, END_TIME >
+    vector<tuple<int, int, int, RankState, double, double, double>> events;
 
     int microbatch; // 当前处理的 microbatch（正值表示正向，负值表示反向）
     set<int> completedFwdMicrobatches;  // 已完成正向的 microbatch
@@ -151,7 +151,7 @@ public:
     double stableTime();
     void progress(double time);
     void printStates();
-    void addEvent(int ep, int eventType, int mb, RankState state = PP_WAIT, double remainingTime = 0);
+    void addEvent(int ep, int eventType, int mb, RankState state = PP_WAIT, double remainingTime = 0, double startTime = 0, double endTime = 0);
     bool isFirstRankInPipeline() const;
     bool isLastRankInPipeline() const;
     int getNextMicrobatch();
