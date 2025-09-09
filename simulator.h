@@ -163,15 +163,23 @@ public:
 };
 
 struct SimResult {
-    double globalTime;
-    double pureTpCommTime;
-    double pureTpFwCommTime;
-    double pureTpBwCommTime;
-    double purePpCommTime;
-    double purePpFwCommTime;
-    double purePpBwCommTime;
-    double pureDpCommTime;
-    double pureTotalCommTime;
+    // 全局时间统计
+    double globalTime;  // timelineEvents的截止时间
+    
+    // 新的通信时间统计字段 - 按batch统计（考虑时间重叠）
+    double batchTpFwCommTime;
+    double batchTpBwCommTime;
+    double batchPpFwCommTime;
+    double batchPpBwCommTime;
+    double batchDpCommTime;
+    double totalCommTime;  // 所有3D并行通信的时间轴重叠去重总时间
+    
+    // 新的通信时间统计字段 - 按microbatch统计
+    double microbatchTpFwCommTime;
+    double microbatchTpBwCommTime;
+    double microbatchPpFwCommTime;
+    double microbatchPpBwCommTime;
+    double microbatchDpCommTime;
     
     // Timeline事件列表，每个事件包含 [rank, event_type, microbatch, start_time, end_time]
     struct TimelineEventData {
@@ -190,15 +198,6 @@ public:
     Topology* topology;
 
     vector<Task*> tasks;
-    double globalTime;
-    double pureTpCommTime;
-    double pureTpFwCommTime;
-    double pureTpBwCommTime;
-    double purePpCommTime;
-    double purePpFwCommTime;
-    double purePpBwCommTime;
-    double pureDpCommTime;
-    double pureTotalCommTime;
 
     void initialize();
     void updateStates(); // waiter filling
@@ -223,15 +222,6 @@ public:
     };
     vector<CommEvent> commEvents;
 
-    // 统计结果
-    struct CommStats {
-        double tpForward = 0;
-        double tpBackward = 0;
-        double ppForward = 0;
-        double ppBackward = 0;
-        double dpTotal = 0;
-    };
-    CommStats commStats;
 
     struct TimelineEvent {
         int rank;
@@ -253,6 +243,41 @@ public:
     string endpointToString(EndpointType endpoint);
     string stateToString(RankState state);
 
+};
+
+// 通信时间分析器类
+class CommunicationTimeAnalyzer {
+public:
+    struct MicrobatchStats {
+        double tpForwardTime = 0;
+        double tpBackwardTime = 0;
+        double ppForwardTime = 0;
+        double ppBackwardTime = 0;
+        double dpTime = 0;
+    };
+    
+    struct BatchStats {
+        double tpForwardTime = 0;
+        double tpBackwardTime = 0;
+        double ppForwardTime = 0;
+        double ppBackwardTime = 0;
+        double dpTime = 0;
+        // 添加每个microbatch的统计数据
+        map<int, MicrobatchStats> microbatchStats;
+    };
+    
+    // 按batch统计通信时间（考虑时间重叠），同时保留每个microbatch的统计数据
+    BatchStats analyzePerBatch(const vector<Simulator::TimelineEvent>& events);
+    
+    // 计算所有3D并行通信的总时间（考虑时间重叠）
+    double calculateTotalCommTime(const vector<Simulator::TimelineEvent>& events);
+    
+private:
+    // 计算指定类型通信的非重叠时间
+    double calculateNonOverlappingTime(const vector<Simulator::TimelineEvent>& events, GroupType type, bool isForward);
+    
+    // 辅助函数：合并重叠的时间区间并计算总时间
+    double mergeIntervals(vector<pair<double, double>>& intervals);
 };
 
 #endif // SIMULATOR_H

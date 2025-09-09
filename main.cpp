@@ -14,18 +14,29 @@ Simulator* simulator = nullptr;
 
 // 设置基本结果参数的辅助函数
 void setBasicResults(const SimResult& resultTime, 
-                    double* globalTime, double* tpComm, double* tpFwComm, double* tpBwComm,
-                    double* ppComm, double* ppFwComm, double* ppBwComm, 
-                    double* dpComm, double* totalComm) {
+                    double* globalTime, 
+                    double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm,
+                    double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* microbatchDpComm,
+                    double* totalCommTime) {
+    
+    // 设置全局时间
     *globalTime = resultTime.globalTime;
-    *tpComm = resultTime.pureTpCommTime;
-    *tpFwComm = resultTime.pureTpFwCommTime;
-    *tpBwComm = resultTime.pureTpBwCommTime;
-    *ppComm = resultTime.purePpCommTime;
-    *ppFwComm = resultTime.purePpFwCommTime;
-    *ppBwComm = resultTime.purePpBwCommTime;
-    *dpComm = resultTime.pureDpCommTime;
-    *totalComm = resultTime.pureTotalCommTime;
+    
+    // 设置新的通信时间统计字段
+    *batchTpFwComm = resultTime.batchTpFwCommTime;
+    *batchTpBwComm = resultTime.batchTpBwCommTime;
+    *batchPpFwComm = resultTime.batchPpFwCommTime;
+    *batchPpBwComm = resultTime.batchPpBwCommTime;
+    *batchDpComm = resultTime.batchDpCommTime;
+    
+    *microbatchTpFwComm = resultTime.microbatchTpFwCommTime;
+    *microbatchTpBwComm = resultTime.microbatchTpBwCommTime;
+    *microbatchPpFwComm = resultTime.microbatchPpFwCommTime;
+    *microbatchPpBwComm = resultTime.microbatchPpBwCommTime;
+    *microbatchDpComm = resultTime.microbatchDpCommTime;
+    
+    // 设置总通信时间
+    *totalCommTime = resultTime.totalCommTime;
 }
 
 // 处理时间线事件的辅助函数
@@ -114,7 +125,7 @@ fwdTPSize...: Bytes
 */
 
 // microbatches: GAS
-extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, double* globalTime, double* tpComm, double* tpFwComm, double* tpBwComm, double* ppComm, double* ppFwComm, double* ppBwComm, double* dpComm, double* totalComm, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes) {
+extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes, double* globalTime, double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm, double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* microbatchDpComm, double* totalCommTime) {
     // inter, intra 单位 Bps
 
     cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << fwdCompTime << " " << bwdCompTime << " " << topology_type << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << " " << dpSize << endl;
@@ -195,8 +206,10 @@ extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, 
     cout << "--------------------------" << endl;
 
     // 设置基本结果参数
-    setBasicResults(resultTime, globalTime, tpComm, tpFwComm, tpBwComm, 
-                   ppComm, ppFwComm, ppBwComm, dpComm, totalComm);
+    setBasicResults(resultTime, globalTime,
+                   batchTpFwComm, batchTpBwComm, batchPpFwComm, batchPpBwComm, batchDpComm,
+                   microbatchTpFwComm, microbatchTpBwComm, microbatchPpFwComm, microbatchPpBwComm, microbatchDpComm,
+                   totalCommTime);
     
     // 处理时间线事件数据
     processTimelineEvents(resultTime, timelineEventCount, timelineRanks, timelineEventTypes,

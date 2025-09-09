@@ -9,12 +9,172 @@
 #include <typeinfo>
 
 #include <nlohmann/json.hpp>
+#include <algorithm>
 
 using namespace std;
 
 extern Topology* topology;
 extern Workload* workload;
 extern Simulator* simulator;
+
+// CommunicationTimeAnalyzer 实现
+CommunicationTimeAnalyzer::BatchStats CommunicationTimeAnalyzer::analyzePerBatch(const vector<Simulator::TimelineEvent>& events) {
+    BatchStats batchStats;
+    
+    // 用于存储各种类型通信的时间区间，用于batch级别的去重计算
+    vector<pair<double, double>> tpForwardIntervals;
+    vector<pair<double, double>> tpBackwardIntervals;
+    vector<pair<double, double>> ppForwardIntervals;
+    vector<pair<double, double>> ppBackwardIntervals;
+    vector<pair<double, double>> dpIntervals;
+    
+    // 用于存储每个microbatch的各种类型通信的时间区间
+    map<int, vector<pair<double, double>>> mbTpForwardIntervals;
+    map<int, vector<pair<double, double>>> mbTpBackwardIntervals;
+    map<int, vector<pair<double, double>>> mbPpForwardIntervals;
+    map<int, vector<pair<double, double>>> mbPpBackwardIntervals;
+    map<int, vector<pair<double, double>>> mbDpIntervals;
+    
+    // 一次遍历完成所有统计
+    for (const auto& event : events) {
+        // 只处理通信事件
+        if (event.groupType != GroupType::TP && event.groupType != GroupType::PP && event.groupType != GroupType::DP) {
+            continue;
+        }
+        
+        int mb = abs(event.microbatch);
+        bool isForward = event.microbatch > 0;
+        
+        // 收集时间区间用于batch级别的去重计算
+        pair<double, double> interval = {event.startTime, event.endTime};
+        
+        if (event.groupType == GroupType::TP) {
+            if (isForward) {
+                tpForwardIntervals.push_back(interval);
+                mbTpForwardIntervals[mb].push_back(interval);
+            } else {
+                tpBackwardIntervals.push_back(interval);
+                mbTpBackwardIntervals[mb].push_back(interval);
+            }
+        } else if (event.groupType == GroupType::PP) {
+            if (isForward) {
+                ppForwardIntervals.push_back(interval);
+                mbPpForwardIntervals[mb].push_back(interval);
+            } else {
+                ppBackwardIntervals.push_back(interval);
+                mbPpBackwardIntervals[mb].push_back(interval);
+            }
+        } else if (event.groupType == GroupType::DP) {
+            dpIntervals.push_back(interval);
+            mbDpIntervals[mb].push_back(interval);
+        }
+    }
+    
+    // 计算batch级别的去重时间
+    batchStats.tpForwardTime = mergeIntervals(tpForwardIntervals);
+    batchStats.tpBackwardTime = mergeIntervals(tpBackwardIntervals);
+    batchStats.ppForwardTime = mergeIntervals(ppForwardIntervals);
+    batchStats.ppBackwardTime = mergeIntervals(ppBackwardIntervals);
+    batchStats.dpTime = mergeIntervals(dpIntervals);
+    
+    // 计算每个microbatch的去重时间
+    for (const auto& [mb, intervals] : mbTpForwardIntervals) {
+        batchStats.microbatchStats[mb].tpForwardTime = mergeIntervals(const_cast<vector<pair<double, double>>&>(intervals));
+    }
+    for (const auto& [mb, intervals] : mbTpBackwardIntervals) {
+        batchStats.microbatchStats[mb].tpBackwardTime = mergeIntervals(const_cast<vector<pair<double, double>>&>(intervals));
+    }
+    for (const auto& [mb, intervals] : mbPpForwardIntervals) {
+        batchStats.microbatchStats[mb].ppForwardTime = mergeIntervals(const_cast<vector<pair<double, double>>&>(intervals));
+    }
+    for (const auto& [mb, intervals] : mbPpBackwardIntervals) {
+        batchStats.microbatchStats[mb].ppBackwardTime = mergeIntervals(const_cast<vector<pair<double, double>>&>(intervals));
+    }
+    for (const auto& [mb, intervals] : mbDpIntervals) {
+        batchStats.microbatchStats[mb].dpTime = mergeIntervals(const_cast<vector<pair<double, double>>&>(intervals));
+    }
+    
+    return batchStats;
+}
+
+// 辅助函数：合并重叠的时间区间并计算总时间
+double CommunicationTimeAnalyzer::mergeIntervals(vector<pair<double, double>>& intervals) {
+    if (intervals.empty()) {
+        return 0.0;
+    }
+    
+    // 排序并合并重叠区间
+    sort(intervals.begin(), intervals.end());
+    
+    vector<pair<double, double>> merged;
+    for (const auto& interval : intervals) {
+        if (merged.empty() || merged.back().second < interval.first) {
+            merged.push_back(interval);
+        } else { 
+            merged.back().second = max(merged.back().second, interval.second);
+        }
+    }
+    
+    // 计算总时间
+    double totalTime = 0;
+    for (const auto& interval : merged) {
+        totalTime += (interval.second - interval.first);
+    }
+    
+    return totalTime;
+}
+
+double CommunicationTimeAnalyzer::calculateNonOverlappingTime(const vector<Simulator::TimelineEvent>& events, GroupType type, bool isForward) {
+    vector<pair<double, double>> intervals;
+    
+    // 提取指定类型和方向的通信事件
+    for (const auto& event : events) {
+        if (event.groupType == type) {
+            // 对于DP通信，不区分前后向
+            if (type == GroupType::DP || (event.microbatch > 0) == isForward) {
+                intervals.push_back({event.startTime, event.endTime});
+            }
+        }
+    }
+    
+    if (intervals.empty()) {
+        return 0.0;
+    }
+    
+    // 排序并合并重叠区间
+    sort(intervals.begin(), intervals.end());
+    
+    vector<pair<double, double>> merged;
+    for (const auto& interval : intervals) {
+        if (merged.empty() || merged.back().second < interval.first) {
+            merged.push_back(interval);
+        } else { 
+            merged.back().second = max(merged.back().second, interval.second);
+        }
+    }
+    
+    // 计算总时间
+    double totalTime = 0;
+    for (const auto& interval : merged) {
+        totalTime += (interval.second - interval.first);
+    }
+    
+    return totalTime;
+}
+
+double CommunicationTimeAnalyzer::calculateTotalCommTime(const vector<Simulator::TimelineEvent>& events) {
+    vector<pair<double, double>> intervals;
+    
+    // 一次遍历提取所有通信事件（TP、PP、DP）
+    for (const auto& event : events) {
+        if (event.groupType == GroupType::TP || event.groupType == GroupType::PP || event.groupType == GroupType::DP) {
+            intervals.push_back({event.startTime, event.endTime});
+        }
+    }
+    
+    // 使用辅助函数合并区间并计算总时间
+    return mergeIntervals(intervals);
+}
 
 string Simulator::groupTypeToString(GroupType type) {
     switch(type) {
@@ -120,7 +280,6 @@ void Simulator::initialize() {
     tasks.clear();
     timelineEvents.clear();
     commEvents.clear();
-    commStats = CommStats();
     
     // 清空microbatch状态，防止全局变量污染
     cout << "[INIT] Before clearing, microbatchStates size: " << MicrobatchManager::microbatchStates.size() << endl;
@@ -133,8 +292,6 @@ void Simulator::initialize() {
     MicrobatchManager::rankMicrobatchTimes.clear();
     cout << "[INIT] After clearing, rankMicrobatchTimes size: " << MicrobatchManager::rankMicrobatchTimes.size() << endl;
     cout << "[INIT] Cleared rankMicrobatchTimes to prevent global variable pollution" << endl;
-
-    globalTime = 0;
 
     // Create group tasks
     for (auto group : workload->groups) {
@@ -279,50 +436,6 @@ void Simulator::initialize() {
         }
     }
 
-    // Calculate pure communication times (for reference)
-    pureTpCommTime = pureTpFwCommTime = pureTpBwCommTime = 0;
-    purePpCommTime = purePpFwCommTime = purePpBwCommTime = 0;
-    pureDpCommTime = pureTotalCommTime = 0;
-
-    for (auto group : workload->groups) {
-        for (auto conn : group->connections) {
-            double commTime = 0;
-            double fwCommTime = 0;
-            double bwCommTime = 0;
-            
-            switch (group->type) {
-                case GroupType::TP:
-                    for (auto link : conn->pathLinks) {
-                        fwCommTime += workload->fwdTPSize / link->capacity;
-                        bwCommTime += workload->bwdTPSize / link->capacity;
-                    }
-                    commTime = fwCommTime + bwCommTime;
-                    pureTpFwCommTime += fwCommTime;
-                    pureTpBwCommTime += bwCommTime;
-                    pureTpCommTime += commTime;
-                    break;
-                    
-                case GroupType::PP:
-                    for (auto link : conn->pathLinks) {
-                        fwCommTime += workload->fwdPPSize / link->capacity;
-                        bwCommTime += workload->bwdPPSize / link->capacity;
-                    }
-                    commTime = fwCommTime + bwCommTime;
-                    purePpFwCommTime += fwCommTime;
-                    purePpBwCommTime += bwCommTime;
-                    purePpCommTime += commTime;
-                    break;
-                    
-                case GroupType::DP:
-                    for (auto link : conn->pathLinks) {
-                        commTime += workload->dpSize / link->capacity;
-                    }
-                    pureDpCommTime += commTime;
-                    break;
-            }
-            pureTotalCommTime += commTime;
-        }
-    }
 
     cout << "Simulator initialized with " << tasks.size() << " tasks" << endl;
     cout << "  - " << workload->ranks.size() << " rank tasks" << endl;
@@ -575,14 +688,36 @@ SimResult Simulator::py_run(){
     
     SimResult result;
     result.globalTime = finalGlobalTime;
-    result.pureTpCommTime = pureTpCommTime;
-    result.pureTpFwCommTime = pureTpFwCommTime;
-    result.pureTpBwCommTime = pureTpBwCommTime;
-    result.purePpCommTime = purePpCommTime;
-    result.purePpFwCommTime = purePpFwCommTime;
-    result.purePpBwCommTime = purePpBwCommTime;
-    result.pureDpCommTime = pureDpCommTime;
-    result.pureTotalCommTime = pureTotalCommTime;
+    
+    // 使用通信时间分析器进行详细统计
+    CommunicationTimeAnalyzer analyzer;
+    
+    // 按batch统计（考虑时间重叠），同时获取每个microbatch的统计数据
+    CommunicationTimeAnalyzer::BatchStats batchStats = analyzer.analyzePerBatch(timelineEvents);
+    result.batchTpFwCommTime = batchStats.tpForwardTime;
+    result.batchTpBwCommTime = batchStats.tpBackwardTime;
+    result.batchPpFwCommTime = batchStats.ppForwardTime;
+    result.batchPpBwCommTime = batchStats.ppBackwardTime;
+    result.batchDpCommTime = batchStats.dpTime;
+    
+    // 计算所有3D并行通信的总时间（考虑时间重叠）
+    result.totalCommTime = analyzer.calculateTotalCommTime(timelineEvents);
+    
+    // 从batchStats中获取第1个microbatch的通信时间作为代表
+    result.microbatchTpFwCommTime = 0;
+    result.microbatchTpBwCommTime = 0;
+    result.microbatchPpFwCommTime = 0;
+    result.microbatchPpBwCommTime = 0;
+    result.microbatchDpCommTime = 0;
+    
+    if (batchStats.microbatchStats.find(1) != batchStats.microbatchStats.end()) {
+        const auto& firstMbStats = batchStats.microbatchStats[1];
+        result.microbatchTpFwCommTime = firstMbStats.tpForwardTime;
+        result.microbatchTpBwCommTime = firstMbStats.tpBackwardTime;
+        result.microbatchPpFwCommTime = firstMbStats.ppForwardTime;
+        result.microbatchPpBwCommTime = firstMbStats.ppBackwardTime;
+        result.microbatchDpCommTime = firstMbStats.dpTime;
+    }
     
     // 融合打印和收集timeline事件：在遍历过程中同时打印和收集数据
     for (size_t i = 0; i < timelineEvents.size(); ++i) {
@@ -613,11 +748,23 @@ SimResult Simulator::py_run(){
 
     cout << "Simulation finished" << endl;
     cout << "Final Global Time: " << finalGlobalTime << endl;
-    cout << "TP Forward Time: " << commStats.tpForward << endl;
-    cout << "TP Backward Time: " << commStats.tpBackward << endl;
-    cout << "PP Forward Time: " << commStats.ppForward << endl;
-    cout << "PP Backward Time: " << commStats.ppBackward << endl;
-    cout << "DP Total Time: " << commStats.dpTotal << endl;
+    
+    // 输出新的通信时间统计结果
+    cout << "=== Communication Time Analysis ===" << endl;
+    cout << "Global Time: " << result.globalTime << endl;
+    cout << "Total Communication Time (with overlap deduplication): " << result.totalCommTime << endl;
+    cout << "Batch-level (with overlap deduplication):" << endl;
+    cout << "  Batch TP Forward Time: " << result.batchTpFwCommTime << endl;
+    cout << "  Batch TP Backward Time: " << result.batchTpBwCommTime << endl;
+    cout << "  Batch PP Forward Time: " << result.batchPpFwCommTime << endl;
+    cout << "  Batch PP Backward Time: " << result.batchPpBwCommTime << endl;
+    cout << "  Batch DP Time: " << result.batchDpCommTime << endl;
+    cout << "Microbatch-level (mb=1 representative):" << endl;
+    cout << "  Microbatch TP Forward Time: " << result.microbatchTpFwCommTime << endl;
+    cout << "  Microbatch TP Backward Time: " << result.microbatchTpBwCommTime << endl;
+    cout << "  Microbatch PP Forward Time: " << result.microbatchPpFwCommTime << endl;
+    cout << "  Microbatch PP Backward Time: " << result.microbatchPpBwCommTime << endl;
+    cout << "  Microbatch DP Time: " << result.microbatchDpCommTime << endl;
     cout << "---------------------------" << endl;
 
     return result;

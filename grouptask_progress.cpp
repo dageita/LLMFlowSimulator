@@ -179,26 +179,6 @@ void GroupTask::progress(double time){
                             }
                         }
                     }
-                    
-                    // 更新统计（以rank 0为基准）
-                    // if (senders[0]->rank->id == 0 || receivers[0]->rank->id == 0) {
-                        double duration = evt.endTime - evt.startTime;
-                        if (group->type == GroupType::TP) {
-                            if (mb > 0) 
-                                simulator->commStats.tpForward += duration;
-                            else 
-                                simulator->commStats.tpBackward += duration;
-                        } 
-                        else if (group->type == GroupType::PP) {
-                            if (mb > 0) 
-                                simulator->commStats.ppForward += duration;
-                            else 
-                                simulator->commStats.ppBackward += duration;
-                        }
-                        else if (group->type == GroupType::DP) {
-                            simulator->commStats.dpTotal += duration;
-                        }
-                    // }
                 }
             }
         }
