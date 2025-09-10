@@ -172,6 +172,8 @@ struct SimResult {
     double batchPpFwCommTime;
     double batchPpBwCommTime;
     double batchDpCommTime;
+    double batchTpCommTime;   // TP通信总时间（前向+后向，时间轴去重）
+    double batchPpCommTime;   // PP通信总时间（前向+后向，时间轴去重）
     double totalCommTime;  // 所有3D并行通信的时间轴重叠去重总时间
     
     // 新的通信时间统计字段 - 按microbatch统计
@@ -262,6 +264,8 @@ public:
         double ppForwardTime = 0;
         double ppBackwardTime = 0;
         double dpTime = 0;
+        double tpCommTime = 0;   // TP通信总时间（前向+后向，时间轴去重）
+        double ppCommTime = 0;   // PP通信总时间（前向+后向，时间轴去重）
         // 添加每个microbatch的统计数据
         map<int, MicrobatchStats> microbatchStats;
     };

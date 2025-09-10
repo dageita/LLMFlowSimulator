@@ -77,6 +77,17 @@ CommunicationTimeAnalyzer::BatchStats CommunicationTimeAnalyzer::analyzePerBatch
     batchStats.ppBackwardTime = mergeIntervals(ppBackwardIntervals);
     batchStats.dpTime = mergeIntervals(dpIntervals);
     
+    // 计算TP和PP的总通信时间（前向+后向，时间轴去重）
+    vector<pair<double, double>> tpAllIntervals;
+    tpAllIntervals.insert(tpAllIntervals.end(), tpForwardIntervals.begin(), tpForwardIntervals.end());
+    tpAllIntervals.insert(tpAllIntervals.end(), tpBackwardIntervals.begin(), tpBackwardIntervals.end());
+    batchStats.tpCommTime = mergeIntervals(tpAllIntervals);
+    
+    vector<pair<double, double>> ppAllIntervals;
+    ppAllIntervals.insert(ppAllIntervals.end(), ppForwardIntervals.begin(), ppForwardIntervals.end());
+    ppAllIntervals.insert(ppAllIntervals.end(), ppBackwardIntervals.begin(), ppBackwardIntervals.end());
+    batchStats.ppCommTime = mergeIntervals(ppAllIntervals);
+    
     // 计算每个microbatch的去重时间
     for (const auto& [mb, intervals] : mbTpForwardIntervals) {
         batchStats.microbatchStats[mb].tpForwardTime = mergeIntervals(const_cast<vector<pair<double, double>>&>(intervals));
@@ -699,6 +710,8 @@ SimResult Simulator::py_run(){
     result.batchPpFwCommTime = batchStats.ppForwardTime;
     result.batchPpBwCommTime = batchStats.ppBackwardTime;
     result.batchDpCommTime = batchStats.dpTime;
+    result.batchTpCommTime = batchStats.tpCommTime;
+    result.batchPpCommTime = batchStats.ppCommTime;
     
     // 计算所有3D并行通信的总时间（考虑时间重叠）
     result.totalCommTime = analyzer.calculateTotalCommTime(timelineEvents);
@@ -759,6 +772,8 @@ SimResult Simulator::py_run(){
     cout << "  Batch PP Forward Time: " << result.batchPpFwCommTime << endl;
     cout << "  Batch PP Backward Time: " << result.batchPpBwCommTime << endl;
     cout << "  Batch DP Time: " << result.batchDpCommTime << endl;
+    cout << "  Batch TP Total Time: " << result.batchTpCommTime << endl;
+    cout << "  Batch PP Total Time: " << result.batchPpCommTime << endl;
     cout << "Microbatch-level (mb=1 representative):" << endl;
     cout << "  Microbatch TP Forward Time: " << result.microbatchTpFwCommTime << endl;
     cout << "  Microbatch TP Backward Time: " << result.microbatchTpBwCommTime << endl;

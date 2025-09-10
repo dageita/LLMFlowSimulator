@@ -16,7 +16,8 @@ Simulator* simulator = nullptr;
 void setBasicResults(const SimResult& resultTime, 
                     double* globalTime, 
                     double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm,
-                    double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* microbatchDpComm,
+                    double* batchTpComm, double* batchPpComm,
+                    double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm,
                     double* totalCommTime) {
     
     // 设置全局时间
@@ -28,12 +29,13 @@ void setBasicResults(const SimResult& resultTime,
     *batchPpFwComm = resultTime.batchPpFwCommTime;
     *batchPpBwComm = resultTime.batchPpBwCommTime;
     *batchDpComm = resultTime.batchDpCommTime;
+    *batchTpComm = resultTime.batchTpCommTime;
+    *batchPpComm = resultTime.batchPpCommTime;
     
     *microbatchTpFwComm = resultTime.microbatchTpFwCommTime;
     *microbatchTpBwComm = resultTime.microbatchTpBwCommTime;
     *microbatchPpFwComm = resultTime.microbatchPpFwCommTime;
     *microbatchPpBwComm = resultTime.microbatchPpBwCommTime;
-    *microbatchDpComm = resultTime.microbatchDpCommTime;
     
     // 设置总通信时间
     *totalCommTime = resultTime.totalCommTime;
@@ -125,7 +127,7 @@ fwdTPSize...: Bytes
 */
 
 // microbatches: GAS
-extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes, double* globalTime, double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm, double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* microbatchDpComm, double* totalCommTime) {
+extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes, double* globalTime, double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm, double* batchTpComm, double* batchPpComm, double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* totalCommTime) {
     // inter, intra 单位 Bps
 
     cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << fwdCompTime << " " << bwdCompTime << " " << topology_type << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << " " << dpSize << endl;
@@ -208,7 +210,8 @@ extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, 
     // 设置基本结果参数
     setBasicResults(resultTime, globalTime,
                    batchTpFwComm, batchTpBwComm, batchPpFwComm, batchPpBwComm, batchDpComm,
-                   microbatchTpFwComm, microbatchTpBwComm, microbatchPpFwComm, microbatchPpBwComm, microbatchDpComm,
+                   batchTpComm, batchPpComm,
+                   microbatchTpFwComm, microbatchTpBwComm, microbatchPpFwComm, microbatchPpBwComm,
                    totalCommTime);
     
     // 处理时间线事件数据
