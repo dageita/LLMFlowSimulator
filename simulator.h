@@ -181,7 +181,6 @@ struct SimResult {
     double microbatchTpBwCommTime;
     double microbatchPpFwCommTime;
     double microbatchPpBwCommTime;
-    double microbatchDpCommTime;
     
     // Timeline事件列表，每个事件包含 [rank, event_type, microbatch, start_time, end_time]
     struct TimelineEventData {
