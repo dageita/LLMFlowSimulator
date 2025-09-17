@@ -721,7 +721,6 @@ SimResult Simulator::py_run(){
     result.microbatchTpBwCommTime = 0;
     result.microbatchPpFwCommTime = 0;
     result.microbatchPpBwCommTime = 0;
-    result.microbatchDpCommTime = 0;
     
     if (batchStats.microbatchStats.find(1) != batchStats.microbatchStats.end()) {
         const auto& firstMbStats = batchStats.microbatchStats[1];
@@ -729,7 +728,6 @@ SimResult Simulator::py_run(){
         result.microbatchTpBwCommTime = firstMbStats.tpBackwardTime;
         result.microbatchPpFwCommTime = firstMbStats.ppForwardTime;
         result.microbatchPpBwCommTime = firstMbStats.ppBackwardTime;
-        result.microbatchDpCommTime = firstMbStats.dpTime;
     }
     
     // 融合打印和收集timeline事件：在遍历过程中同时打印和收集数据
@@ -779,7 +777,6 @@ SimResult Simulator::py_run(){
     cout << "  Microbatch TP Backward Time: " << result.microbatchTpBwCommTime << endl;
     cout << "  Microbatch PP Forward Time: " << result.microbatchPpFwCommTime << endl;
     cout << "  Microbatch PP Backward Time: " << result.microbatchPpBwCommTime << endl;
-    cout << "  Microbatch DP Time: " << result.microbatchDpCommTime << endl;
     cout << "---------------------------" << endl;
 
     return result;
