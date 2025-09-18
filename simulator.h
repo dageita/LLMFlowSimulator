@@ -205,7 +205,7 @@ public:
     void updateLinkStates(std::set<Flow*>& activeFlows, std::set<Link*>& activeLinks);
     bool isSimulationDone();
     // void run();
-    SimResult py_run();
+    SimResult py_run(bool enableTimeline = true);
 
     void printStates();
     void print() ;

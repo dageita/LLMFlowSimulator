@@ -607,7 +607,7 @@ bool Simulator::isSimulationDone() {
     return true;
 }
 
-SimResult Simulator::py_run(){
+SimResult Simulator::py_run(bool enableTimeline){
     cout << "===========================" << endl;
     int round = 0;
     int targetRound = -1;   // 用于周期性打印states 
@@ -731,30 +731,34 @@ SimResult Simulator::py_run(){
     }
     
     // 融合打印和收集timeline事件：在遍历过程中同时打印和收集数据
-    for (size_t i = 0; i < timelineEvents.size(); ++i) {
-        const auto& e = timelineEvents[i];
-        
-        // 打印事件信息
-        cout << "    [" << e.rank << ", \"" 
-            << eventTypeToString(e.eventType) 
-            << "\", "        
-            << e.microbatch << ", " 
-            << e.startTime << ", " << e.endTime << "]";
-                
-        // 如果不是最后一个元素，添加逗号
-        if (i < timelineEvents.size() - 1) {
-            cout << ",";
+    if (enableTimeline) {
+        for (size_t i = 0; i < timelineEvents.size(); ++i) {
+            const auto& e = timelineEvents[i];
+            
+            // 打印事件信息
+            cout << "    [" << e.rank << ", \"" 
+                << eventTypeToString(e.eventType) 
+                << "\", "        
+                << e.microbatch << ", " 
+                << e.startTime << ", " << e.endTime << "]";
+                    
+            // 如果不是最后一个元素，添加逗号
+            if (i < timelineEvents.size() - 1) {
+                cout << ",";
+            }
+            cout << "\n";
+            
+            // 同时收集事件数据到结果中
+            SimResult::TimelineEventData eventData;
+            eventData.rank = e.rank;
+            eventData.eventType = eventTypeToString(e.eventType);
+            eventData.microbatch = e.microbatch;
+            eventData.startTime = e.startTime;
+            eventData.endTime = e.endTime;
+            result.timelineEvents.push_back(eventData);
         }
-        cout << "\n";
-        
-        // 同时收集事件数据到结果中
-        SimResult::TimelineEventData eventData;
-        eventData.rank = e.rank;
-        eventData.eventType = eventTypeToString(e.eventType);
-        eventData.microbatch = e.microbatch;
-        eventData.startTime = e.startTime;
-        eventData.endTime = e.endTime;
-        result.timelineEvents.push_back(eventData);
+    } else {
+        cout << "[TIMELINE] Timeline data collection disabled, skipping timeline event collection" << endl;
     }
 
     cout << "Simulation finished" << endl;

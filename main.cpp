@@ -42,9 +42,15 @@ void setBasicResults(const SimResult& resultTime,
 }
 
 // 处理时间线事件的辅助函数
-void processTimelineEvents(const SimResult& resultTime,
+void processTimelineEvents(const SimResult& resultTime, bool enableTimeline,
                           int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[],
                           int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes) {
+    // 如果不需要timeline数据，直接返回
+    if (!enableTimeline) {
+        cout << "[TIMELINE] Timeline data collection disabled, skipping timeline event processing" << endl;
+        return;
+    }
+    
     if (timelineEventCount && timelineRanks && timelineEventTypes && timelineMicrobatches && timelineStartTimes && timelineEndTimes) {
         // 先检查指针是否指向有效内存区域
         if (timelineEventCount == nullptr) {
@@ -127,10 +133,10 @@ fwdTPSize...: Bytes
 */
 
 // microbatches: GAS
-extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes, double* globalTime, double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm, double* batchTpComm, double* batchPpComm, double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* totalCommTime) {
+extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, double fwdCompTime, double bwdCompTime, int microbatches, const char* topology_type, uint64_t fwdTPSize, uint64_t bwdTPSize, uint64_t fwdPPSize, uint64_t bwdPPSize, uint64_t dpSize, bool enableTimeline, int* timelineEventCount, int* timelineRanks, char* timelineEventTypes[], int* timelineMicrobatches, double* timelineStartTimes, double* timelineEndTimes, double* globalTime, double* batchTpFwComm, double* batchTpBwComm, double* batchPpFwComm, double* batchPpBwComm, double* batchDpComm, double* batchTpComm, double* batchPpComm, double* microbatchTpFwComm, double* microbatchTpBwComm, double* microbatchPpFwComm, double* microbatchPpBwComm, double* totalCommTime) {
     // inter, intra 单位 Bps
 
-    cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << fwdCompTime << " " << bwdCompTime << " " << topology_type << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << " " << dpSize << endl;
+    cout << "wxftest " << pp << " " << dp << " " << tp << " " << inter << " " << intra << " " << fwdCompTime << " " << bwdCompTime << " " << topology_type << " " << microbatches << " " << fwdTPSize << " " << bwdTPSize << " " << fwdPPSize << " " << bwdPPSize << " " << dpSize << " enableTimeline=" << (enableTimeline ? "true" : "false") << endl;
     // srand(time(nullptr));
     srand(0);
 
@@ -201,7 +207,7 @@ extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, 
     cout << "Simulator initialization Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
     start = current;
     cout << "--------------------------" << endl;
-    SimResult resultTime = simulator->py_run();
+    SimResult resultTime = simulator->py_run(enableTimeline);
 
     current = chrono::high_resolution_clock::now();
     cout << "Simulator run Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;
@@ -215,7 +221,7 @@ extern "C" void pycall_main(int pp, int dp, int tp, double inter, double intra, 
                    totalCommTime);
     
     // 处理时间线事件数据
-    processTimelineEvents(resultTime, timelineEventCount, timelineRanks, timelineEventTypes,
+    processTimelineEvents(resultTime, enableTimeline, timelineEventCount, timelineRanks, timelineEventTypes,
                          timelineMicrobatches, timelineStartTimes, timelineEndTimes);
     
     cout << "------------Success--------------" << endl;
