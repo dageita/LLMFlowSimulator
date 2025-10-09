@@ -275,7 +275,7 @@ void Workload::placement(){
         return a->id < b->id;
     });
 
-    // 找到所有 GPU 节点
+    // 找到所有 GPU 节点（优先使用GPU）
     vector<Node*> gpus;
     for(auto node : topology->nodes) {
         if(node->type == NodeType::GPU) {
@@ -286,13 +286,39 @@ void Workload::placement(){
         return a->id < b->id;
     });
 
-    // 映射 Rank 到 GPU
+    // 如果GPU节点不够，则使用HOST节点作为备选
+    vector<Node*> hosts;
+    if (gpus.size() < ranks.size()) {
+        for(auto node : topology->nodes) {
+            if(node->type == NodeType::HOST) {
+                hosts.push_back(node);
+            }
+        }
+        sort(hosts.begin(), hosts.end(), [](Node* a, Node* b) {
+            return a->id < b->id;
+        });
+    }
+
+    // 映射 Rank 到计算节点（优先GPU，不足时使用HOST）
     for(int i = 0; i < ranks.size(); ++i) {
         Rank* rank = ranks[i];
-        Node* gpu = gpus[i % gpus.size()];
-        rank->host = gpu;         // host 指向 GPU
-        gpu->rank = rank;
-        gpu->ranks.push_back(rank); // Track all ranks on the same GPU
+        Node* computeNode;
+        
+        if (i < gpus.size()) {
+            // 优先使用GPU节点
+            computeNode = gpus[i];
+        } else {
+            // GPU节点不足时，使用HOST节点
+            int hostIndex = (i - gpus.size()) % hosts.size();
+            computeNode = hosts[hostIndex];
+        }
+        
+        rank->host = computeNode;
+        computeNode->rank = rank;
+        computeNode->ranks.push_back(rank); // Track all ranks on the same node
+        
+        cout << "Placement: Rank " << rank->id << " -> Node " << computeNode->id 
+             << " (Type: " << (computeNode->type == NodeType::GPU ? "GPU" : "HOST") << ")" << endl;
     }
 }
 
@@ -343,10 +369,24 @@ void Workload::routing(double inter, double intra) {
                     for (int i = 0; i < path.size() - 1; ++i) {
                         Node* current = path[i];
                         Node* next = path[i + 1];
-                        for (auto link : current->links) {
+                        
+                        // 首先检查NVLink连接
+                        bool foundLink = false;
+                        for (auto link : current->nvlinks) {
                             if (link->dst == next) {
                                 conn->pathLinks.push_back(link);
+                                foundLink = true;
                                 break;
+                            }
+                        }
+                        
+                        // 如果NVLink中没有找到，再检查普通links
+                        if (!foundLink) {
+                            for (auto link : current->links) {
+                                if (link->dst == next) {
+                                    conn->pathLinks.push_back(link);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -358,10 +398,24 @@ void Workload::routing(double inter, double intra) {
                 for (int i = 0; i < path.size() - 1; ++i) {
                     Node* current = path[i];
                     Node* next = path[i + 1];
-                    for (auto link : current->links) {
+                    
+                    // 首先检查NVLink连接
+                    bool foundLink = false;
+                    for (auto link : current->nvlinks) {
                         if (link->dst == next) {
                             conn->pathLinks.push_back(link);
+                            foundLink = true;
                             break;
+                        }
+                    }
+                    
+                    // 如果NVLink中没有找到，再检查普通links
+                    if (!foundLink) {
+                        for (auto link : current->links) {
+                            if (link->dst == next) {
+                                conn->pathLinks.push_back(link);
+                                break;
+                            }
                         }
                     }
                 }

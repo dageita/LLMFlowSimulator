@@ -68,8 +68,8 @@ public:
     }
 
     void generateFattree(int switch_radix, int pods, double capacity);
-    void generateSpineleaf(int switch_radix, double capacity, double nvlink_capacity);
-    void generateOneBigSwitch(int switch_radix, double capacity, double nvlink_capacity);
+    void generateSpineleaf(int totalGPUs, double interHostCapacity, double intraHostCapacity);
+    void generateOneBigSwitch(int totalGPUs, double interHostCapacity, double intraHostCapacity);
     void generateSingleMachine(int numGPUs, double nvlink_capacity);
     // void routing();
 

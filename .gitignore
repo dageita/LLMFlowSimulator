@@ -3,3 +3,4 @@ log.txt
 .vscode/*
 main
 *.so
+*.log

@@ -237,11 +237,8 @@ int main(int argc, char** argv){
 
     cout << "--------------------------" << endl;
     topology = new Topology();
-    // topology->generateFattree(8, 1, 1);
-    // topology->generateOneBigSwitch(8, 1); // capacity * factor
-    // topology->generateOneBigSwitch(1 * 1 * 8, 400.0 * 1000000000 / 8, 400.0 * 1000000000 / 8); // Add NVLink capacity
     // 这里 400.0单位为Gbps，故 400.0 * 1000000000 / 8 的单位为GBps
-    topology->generateSpineleaf(1 * 1 * 8, 400.0 * 1000000000 / 8, 400.0 * 1000000000 / 8);
+    topology->generateSpineleaf(8, 400.0 * 1000000000 / 8, 400.0 * 1000000000 / 8);
     // topology->print();
     auto current = chrono::high_resolution_clock::now();
     cout << "Topology generation Execution Time: " << chrono::duration_cast<chrono::milliseconds>(current - start).count() << " ms" << endl;

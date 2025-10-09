@@ -104,73 +104,81 @@ void Topology::generateFattree(int switch_radix, int pods, double capacity){
 
 }
 
-void Topology::generateOneBigSwitch(int switch_radix, double capacity, double nvlink_capacity) {
-    int numHosts = switch_radix;
+void Topology::generateOneBigSwitch(int totalGPUs, double interHostCapacity, double intraHostCapacity) {
+    int numGPUsPerHost = 8;
+    int numHosts = (totalGPUs + numGPUsPerHost - 1) / numGPUsPerHost; // 向上取整，确保有足够的主机
     int nodeId = 0;
 
-    // 创建主机节点
+    cout << "wxftest generateOneBigSwitch: totalGPUs=" << totalGPUs << ", numHosts=" << numHosts << ", numGPUsPerHost=" << numGPUsPerHost << endl;
+
+    // 创建HOST节点
+    vector<Node*> hosts;
     for (int i = 0; i < numHosts; ++i) {
-        nodes.push_back(new Node(nodeId++, NodeType::HOST));
+        Node* host = new Node(nodeId++, NodeType::HOST);
+        nodes.push_back(host);
+        hosts.push_back(host);
+    }
+
+    // 创建GPU节点
+    vector<Node*> gpus;
+    for (int i = 0; i < totalGPUs; ++i) {
+        Node* gpu = new Node(nodeId++, NodeType::GPU);
+        nodes.push_back(gpu);
+        gpus.push_back(gpu);
     }
 
     // 创建交换机节点
-    nodes.push_back(new Node(nodeId++, NodeType::TOR));
+    Node* switchNode = new Node(nodeId++, NodeType::TOR);
+    nodes.push_back(switchNode);
 
     int linkId = 0;
-    // 连接主机到交换机
+    
+    // 连接HOST到交换机（节点间连接）
     for (int i = 0; i < numHosts; ++i) {
-        Link* link1 = new Link(linkId++, nodes[i], nodes[numHosts], capacity); // 主机到交换机
-        Link* link2 = new Link(linkId++, nodes[numHosts], nodes[i], capacity); // 交换机到主机
+        Link* link1 = new Link(linkId++, hosts[i], switchNode, interHostCapacity); // HOST到交换机
+        Link* link2 = new Link(linkId++, switchNode, hosts[i], interHostCapacity); // 交换机到HOST
         links.push_back(link1);
         links.push_back(link2);
-        nodes[i]->links.push_back(link1);
-        nodes[numHosts]->links.push_back(link2);
+        hosts[i]->links.push_back(link1);
+        switchNode->links.push_back(link2);
     }
 
-    // 添加 NVLink 连接（每 8 个主机共享一个 NVLink 组）
-    for (int i = 0; i < numHosts; i += 8) {
-        for (int j = i; j < i + 8 && j < numHosts; ++j) {
-            for (int k = j + 1; k < i + 8 && k < numHosts; ++k) {
+    // 连接GPU到对应的HOST（节点内连接）
+    for (int i = 0; i < numHosts; ++i) {
+        for (int j = 0; j < numGPUsPerHost; ++j) {
+            int gpuIndex = i * numGPUsPerHost + j;
+            if (gpuIndex < totalGPUs) { // 确保不超出实际GPU数量
+                Link* link1 = new Link(linkId++, gpus[gpuIndex], hosts[i], intraHostCapacity, true); // GPU到HOST
+                Link* link2 = new Link(linkId++, hosts[i], gpus[gpuIndex], intraHostCapacity, true); // HOST到GPU
+                links.push_back(link1);
+                links.push_back(link2);
+                gpus[gpuIndex]->links.push_back(link1);
+                hosts[i]->links.push_back(link2);
+            }
+        }
+    }
+
+    // 添加GPU节点间的NVLink连接（每8个GPU在一个HOST内）
+    for (int i = 0; i < numHosts; ++i) {
+        int startGPU = i * numGPUsPerHost;
+        int endGPU = std::min(startGPU + numGPUsPerHost, totalGPUs); // 确保不超出实际GPU数量
+        
+        // 在同一个HOST内的GPU之间创建NVLink连接
+        for (int j = startGPU; j < endGPU; ++j) {
+            for (int k = j + 1; k < endGPU; ++k) {
                 // 创建双向 NVLink
-                Link* nvlink1 = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // 标记为 NVLink
-                Link* nvlink2 = new Link(linkId++, nodes[k], nodes[j], nvlink_capacity, true); // 反向 NVLink
-                links.push_back(nvlink1); // 全局 links 中存储 NVLink
-                links.push_back(nvlink2); // 全局 links 中存储反向 NVLink
-                nodes[j]->nvlinks.push_back(nvlink1); // 存储到 nvlinks
-                nodes[k]->nvlinks.push_back(nvlink2); // 存储到 nvlinks
+                Link* nvlink1 = new Link(linkId++, gpus[j], gpus[k], intraHostCapacity, true);
+                Link* nvlink2 = new Link(linkId++, gpus[k], gpus[j], intraHostCapacity, true);
+                links.push_back(nvlink1);
+                links.push_back(nvlink2);
+                gpus[j]->nvlinks.push_back(nvlink1);
+                gpus[k]->nvlinks.push_back(nvlink2);
             }
         }
     }
 
-    // 添加组间 NVLink 连接
-    // 计算总组数
-    int numGroups = (numHosts + 7) / 8; // 向上取整
-    
-    // 遍历所有组对
-    for (int g1 = 0; g1 < numGroups; ++g1) {
-        for (int g2 = g1 + 1; g2 < numGroups; ++g2) {
-            // 获取组1的节点范围
-            int start1 = g1 * 8;
-            int end1 = std::min(start1 + 8, numHosts);
-            
-            // 获取组2的节点范围
-            int start2 = g2 * 8;
-            int end2 = std::min(start2 + 8, numHosts);
-            
-            // 组间两两连接
-            for (int i = start1; i < end1; ++i) {
-                for (int j = start2; j < end2; ++j) {
-                    // 创建双向 NVLink
-                    Link* interLink1 = new Link(linkId++, nodes[i], nodes[j], capacity);
-                    Link* interLink2 = new Link(linkId++, nodes[j], nodes[i], capacity);
-                    links.push_back(interLink1);
-                    links.push_back(interLink2);
-                    nodes[i]->nvlinks.push_back(interLink1);
-                    nodes[j]->nvlinks.push_back(interLink2);
-                }
-            }
-        }
-    }
+    // 添加HOST间的连接（通过交换机实现）
+    // 这里通过交换机已经实现了HOST间的连接，不需要额外的HOST到HOST直接连接
 
     // 打印节点和连接
     cout << "Nodes:" << endl;
@@ -181,19 +189,34 @@ void Topology::generateOneBigSwitch(int switch_radix, double capacity, double nv
     for (auto link : links) {
         cout << "Link ID: " << link->id << ", Src: " << link->src->id << ", Dst: " << link->dst->id << ", Capacity: " << link->capacity << ", isNVLink: " << link->isNVLink << endl;
     }
-    cout << "wxftest Generated one big switch topology with " << numHosts << " hosts and NVLink capacity: " << nvlink_capacity << endl;
+    cout << "wxftest Generated one big switch topology with " << numHosts << " hosts, " << totalGPUs << " GPUs, inter-host capacity: " << interHostCapacity << ", intra-host capacity: " << intraHostCapacity << endl;
 }
 
 
-void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlink_capacity) {
-    int numHosts = switch_radix * switch_radix / 2; // Hosts per leaf switch
-    int numLeaf = switch_radix / 2; // Number of leaf switches
-    int numSpine = switch_radix / 2; // Number of spine switches
+void Topology::generateSpineleaf(int totalGPUs, double interHostCapacity, double intraHostCapacity) {
+    // 为了保持合理的网络规模，我们基于totalGPUs计算网络参数
+    // 每个HOST包含8个GPU，每个Leaf交换机连接多个HOST
+    int numGPUsPerHost = 8;
+    int numHosts = (totalGPUs + numGPUsPerHost - 1) / numGPUsPerHost; // 向上取整
+    int numLeaf = (numHosts + 3) / 4; // 每个Leaf交换机连接4个HOST
+    int numSpine = numLeaf; // Spine和Leaf数量相等，形成全连接
 
     int nodeId = 0;
-    // Build hosts
+    
+    // 创建HOST节点
+    vector<Node*> hosts;
     for (int i = 0; i < numHosts; ++i) {
-        nodes.push_back(new Node(nodeId++, NodeType::HOST));
+        Node* host = new Node(nodeId++, NodeType::HOST);
+        nodes.push_back(host);
+        hosts.push_back(host);
+    }
+
+    // 创建GPU节点
+    vector<Node*> gpus;
+    for (int i = 0; i < totalGPUs; ++i) {
+        Node* gpu = new Node(nodeId++, NodeType::GPU);
+        nodes.push_back(gpu);
+        gpus.push_back(gpu);
     }
 
     // Build leaf switches
@@ -207,40 +230,66 @@ void Topology::generateSpineleaf(int switch_radix, double capacity, double nvlin
     }
 
     int linkId = 0;
+    
+    // 连接GPU到对应的HOST（节点内连接）
+    for (int i = 0; i < numHosts; ++i) {
+        for (int j = 0; j < numGPUsPerHost; ++j) {
+            int gpuIndex = i * numGPUsPerHost + j;
+            if (gpuIndex < totalGPUs) { // 确保不超出实际GPU数量
+                Link* link1 = new Link(linkId++, gpus[gpuIndex], hosts[i], intraHostCapacity, true); // GPU到HOST
+                Link* link2 = new Link(linkId++, hosts[i], gpus[gpuIndex], intraHostCapacity, true); // HOST到GPU
+                links.push_back(link1);
+                links.push_back(link2);
+                gpus[gpuIndex]->links.push_back(link1);
+                hosts[i]->links.push_back(link2);
+            }
+        }
+    }
+    
     // Connect hosts to leaf switches
     for (int i = 0; i < numHosts; ++i) {
-        int leafIndex = i / (numHosts / numLeaf);
-        Link* link1 = new Link(linkId++, nodes[i], nodes[numHosts + leafIndex], capacity);
-        Link* link2 = new Link(linkId++, nodes[numHosts + leafIndex], nodes[i], capacity);
+        int leafIndex = i / 4; // 每个Leaf交换机连接4个HOST
+        if (leafIndex >= numLeaf) leafIndex = numLeaf - 1; // 防止越界
+        Link* link1 = new Link(linkId++, hosts[i], nodes[numHosts + totalGPUs + leafIndex], interHostCapacity);
+        Link* link2 = new Link(linkId++, nodes[numHosts + totalGPUs + leafIndex], hosts[i], interHostCapacity);
         links.push_back(link1);
         links.push_back(link2);
-        nodes[i]->links.push_back(link1);
-        nodes[numHosts + leafIndex]->links.push_back(link2);
+        hosts[i]->links.push_back(link1);
+        nodes[numHosts + totalGPUs + leafIndex]->links.push_back(link2);
     }
 
     // Connect leaf switches to spine switches
     for (int i = 0; i < numLeaf; ++i) {
         for (int j = 0; j < numSpine; ++j) {
-            Link* link1 = new Link(linkId++, nodes[numHosts + i], nodes[numHosts + numLeaf + j], capacity);
-            Link* link2 = new Link(linkId++, nodes[numHosts + numLeaf + j], nodes[numHosts + i], capacity);
+            Link* link1 = new Link(linkId++, nodes[numHosts + totalGPUs + i], nodes[numHosts + totalGPUs + numLeaf + j], interHostCapacity);
+            Link* link2 = new Link(linkId++, nodes[numHosts + totalGPUs + numLeaf + j], nodes[numHosts + totalGPUs + i], interHostCapacity);
             links.push_back(link1);
             links.push_back(link2);
-            nodes[numHosts + i]->links.push_back(link1);
-            nodes[numHosts + numLeaf + j]->links.push_back(link2);
+            nodes[numHosts + totalGPUs + i]->links.push_back(link1);
+            nodes[numHosts + totalGPUs + numLeaf + j]->links.push_back(link2);
         }
     }
 
-    // Add NVLink connections (every 8 hosts share one NVLink group)
-    for (int i = 0; i < numHosts; i += 8) {
-        for (int j = i; j < i + 8 && j < numHosts; ++j) {
-            for (int k = j + 1; k < i + 8 && k < numHosts; ++k) {
-                Link* nvlink = new Link(linkId++, nodes[j], nodes[k], nvlink_capacity, true); // 标记为 NVLink
-                links.push_back(nvlink);
-                nodes[j]->nvlinks.push_back(nvlink);
-                nodes[k]->nvlinks.push_back(nvlink);
+    // 添加GPU节点间的NVLink连接（每8个GPU在一个HOST内）
+    for (int i = 0; i < numHosts; ++i) {
+        int startGPU = i * numGPUsPerHost;
+        int endGPU = std::min(startGPU + numGPUsPerHost, totalGPUs); // 确保不超出实际GPU数量
+        
+        // 在同一个HOST内的GPU之间创建NVLink连接
+        for (int j = startGPU; j < endGPU; ++j) {
+            for (int k = j + 1; k < endGPU; ++k) {
+                // 创建双向 NVLink
+                Link* nvlink1 = new Link(linkId++, gpus[j], gpus[k], intraHostCapacity, true);
+                Link* nvlink2 = new Link(linkId++, gpus[k], gpus[j], intraHostCapacity, true);
+                links.push_back(nvlink1);
+                links.push_back(nvlink2);
+                gpus[j]->nvlinks.push_back(nvlink1);
+                gpus[k]->nvlinks.push_back(nvlink2);
             }
         }
     }
+    
+    cout << "wxftest Generated spine-leaf topology with " << numHosts << " hosts, " << totalGPUs << " GPUs, " << numLeaf << " leaf switches, " << numSpine << " spine switches, inter-host capacity: " << interHostCapacity << ", intra-host capacity: " << intraHostCapacity << endl;
 }
 
 void Topology::generateSingleMachine(int numGPUs, double intra_capacity) {
@@ -280,19 +329,34 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity, double nvlin
     queue<vector<Node*>> q;
     unordered_set<Node*> visited;
 
-    // 判断src和dst是否在同一个scale-up domain
+    // 优先检查GPU到GPU的直接NVLink连接
     if (src->type == NodeType::GPU && dst->type == NodeType::GPU) {
-        // 判断是否同一个NVLINK_SWITCH
+        cout << "wxftest Checking GPU " << src->id << " to GPU " << dst->id << " connections" << endl;
+        cout << "wxftest Source GPU " << src->id << " has " << src->nvlinks.size() << " nvlinks" << endl;
+        
+        // 检查是否有直接的NVLink连接
+        for (auto link : src->nvlinks) {
+            cout << "wxftest Source GPU " << src->id << " nvlink to node " << link->dst->id << " (type " << link->dst->type << "), isNVLink=" << link->isNVLink << ", capacity=" << link->capacity << endl;
+            if (link->dst == dst && link->isNVLink && link->capacity >= nvlink_capacity) {
+                cout << "wxftest Found direct NVLink connection between GPU " << src->id << " and GPU " << dst->id << endl;
+                return {src, dst};
+            }
+        }
+        
+        // 检查是否通过同一个NVLINK_SWITCH连接
         for (auto link : src->nvlinks) {
             if (link->dst->type == NodeType::NVLINK_SWITCH) {
                 for (auto link2 : dst->nvlinks) {
                     if (link2->dst == link->dst) {
                         // 只考虑scale-up链路
+                        cout << "wxftest Found NVLink switch connection between GPU " << src->id << " and GPU " << dst->id << endl;
                         return {src, link->dst, dst};
                     }
                 }
             }
         }
+        
+        cout << "wxftest No direct NVLink connection found, will use BFS search" << endl;
     }
 
     // Start BFS from the source node
@@ -312,9 +376,9 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity, double nvlin
         // Mark the current node as visited for this path
         visited.insert(current);
 
-        // Explore NVLink neighbors first
+        // Explore NVLink neighbors first (优先使用NVLink)
         for (auto link : current->nvlinks) {
-            if (link->capacity >= capacity || (link->isNVLink && link->capacity >= nvlink_capacity)) {
+            if (link->isNVLink && link->capacity >= nvlink_capacity) {
                 Node* neighbor = link->dst;
                 if (visited.find(neighbor) == visited.end()) {
                     vector<Node*> newPath = path;
@@ -324,9 +388,9 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity, double nvlin
             }
         }
 
-        // Explore remaining neighbors (network links)
+        // Explore regular links (包括非NVLink的连接)
         for (auto link : current->links) {
-            if (link->capacity >= capacity || (link->isNVLink && link->capacity >= nvlink_capacity)) {
+            if (link->capacity >= capacity) {
                 Node* neighbor = link->dst;
                 if (visited.find(neighbor) == visited.end()) {
                     vector<Node*> newPath = path;
@@ -343,9 +407,21 @@ vector<Node*> Topology::ECMP(Node* src, Node* dst, double capacity, double nvlin
         return {};
     }
 
-    // Randomly select one path from allPaths
-    int randomIndex = rand() % allPaths.size();
-    return allPaths[randomIndex];
+    // 优先选择最短路径（GPU直接连接优先）
+    vector<Node*> bestPath = allPaths[0];
+    for (const auto& path : allPaths) {
+        if (path.size() < bestPath.size()) {
+            bestPath = path;
+        }
+    }
+    
+    cout << "wxftest Selected path with " << bestPath.size() << " hops: ";
+    for (auto node : bestPath) {
+        cout << node->id << " ";
+    }
+    cout << endl;
+    
+    return bestPath;
 }
 
 void Topology::print() {
