@@ -403,6 +403,14 @@ void Simulator::initialize() {
                 }
             }
             
+            // 修复：对于纯单机场景（TP=1, PP=1, DP=1），需要预调度所有microbatch的前向计算
+            if (workload->TP <= 1 && workload->PP <= 1 && workload->DP <= 1) {
+                for (int mb = 2; mb <= workload->microbatches; ++mb) {
+                    task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime, 0, 0);
+                }
+                cout << "[INIT] Single-machine scenario: pre-scheduled all FWD microbatches for rank " << rank->id << endl;
+            }
+            
             // 为第一个pipeline stage预调度通信事件（TP优先级高于PP）
             // 1. 首先预调度TP_FWD事件（如果TP>1）
             if (workload->TP > 1) {
@@ -437,6 +445,13 @@ void Simulator::initialize() {
             if (workload->TP <= 1 && workload->PP <= 1 && workload->DP > 1) {
                 task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, -1, COMPUTE, workload->bwdCompTime, 0, 0);
                 cout << "[INIT] DP-only path: pre-scheduled COMPUTE_BWD for mb=-1 on rank " << rank->id << endl;
+            }
+            
+            // 修复：对于纯单机场景（TP=1, PP=1, DP=1），需要为第一个microbatch调度反向计算
+            // 因为第一个microbatch的前向计算是在初始化阶段直接执行的，不会触发事件处理逻辑
+            if (workload->TP <= 1 && workload->PP <= 1 && workload->DP <= 1) {
+                task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, -1, COMPUTE, workload->bwdCompTime, 0, 0);
+                cout << "[INIT] Single-machine scenario: pre-scheduled COMPUTE_BWD for mb=-1 on rank " << rank->id << endl;
             }
             
         } else {

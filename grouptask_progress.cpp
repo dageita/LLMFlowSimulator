@@ -336,8 +336,23 @@ void GroupTask::updateGroupGlobalTime(int mb, int fromRank) {
     cout << "[GROUP-TIME-DEBUG] Retrieved sender microbatch time: Rank=" << fromRank 
          << ", MB=" << mb << ", Time=" << senderMbTime << endl;
     
-    // GroupTask的通信任务基于发送方rank的microbatch完成时间
-    double newGroupTime = senderMbTime;
+    // 修复：查找当前rank上一个通信任务的结束时间，避免通信重叠
+    double lastCommEndTime = 0.0;
+    for (const auto& timelineEvent : simulator->timelineEvents) {
+        // 查找当前group类型和相同rank的通信事件
+        if (timelineEvent.rank == fromRank && 
+            timelineEvent.groupType == group->type &&
+            timelineEvent.endTime > 0 &&  // 已完成的事件
+            timelineEvent.microbatch != mb) {  // 不是当前microbatch
+            lastCommEndTime = std::max(lastCommEndTime, timelineEvent.endTime);
+        }
+    }
+    
+    cout << "[GROUP-TIME-DEBUG] Last communication end time for rank " << fromRank 
+         << " in group " << group->id << ": " << lastCommEndTime << endl;
+    
+    // 取发送方microbatch完成时间和上一个通信结束时间的最大值
+    double newGroupTime = std::max(senderMbTime, lastCommEndTime);
     
     // 更新group的全局时间
     groupGlobalTime = newGroupTime;
@@ -345,5 +360,6 @@ void GroupTask::updateGroupGlobalTime(int mb, int fromRank) {
     cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
          << ") updated global time to " << groupGlobalTime 
          << " (senderMbTime=" << senderMbTime 
+         << ", lastCommEndTime=" << lastCommEndTime
          << ", fromRank=" << fromRank << ", mb=" << mb << ")" << endl;
 }

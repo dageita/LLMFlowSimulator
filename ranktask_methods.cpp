@@ -245,11 +245,11 @@ double RankTask::calculateHandleEventsTime(int mb) {
                  << rankGlobalTime << endl;
             return rankGlobalTime;
         } else {
-            // 不需要TP或DP通信的rank，使用microbatch globalTime进行同步
-            double mbGlobalTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
+            // 修复：单GPU场景下，所有microbatch的计算都应该是串行的
+            // 使用rankGlobalTime确保串行执行，而不是使用microbatch globalTime
             cout << "[HANDLE-TIME-CALC] Different microbatch (abs: " << abs(mb) << " vs " << abs(lastProcessedMb) 
-                 << "), non-TP/DP communication rank, using mbGlobalTime=" << mbGlobalTime << endl;
-            return mbGlobalTime;
+                 << "), single-GPU scenario, using rankGlobalTime=" << rankGlobalTime << " for serial execution" << endl;
+            return rankGlobalTime;
         }
     }
 }

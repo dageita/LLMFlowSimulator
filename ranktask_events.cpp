@@ -242,6 +242,14 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                         cout << "[DP-ONLY-1F1B] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
                              << " after COMPUTE_FWD for mb=" << mb << endl;
                     }
+                    
+                    // 修复：对于纯单机场景（TP=1, PP=1, DP=1），也需要在FWD完成后调度BWD
+                    // 但第一个microbatch的反向计算已经在初始化阶段调度，避免重复
+                    if (workload->TP <= 1 && workload->PP <= 1 && workload->DP <= 1 && mb > 1 && mb <= workload->microbatches) {
+                        pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
+                        cout << "[SINGLE-MACHINE-1F1B] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
+                             << " after COMPUTE_FWD for mb=" << mb << endl;
+                    }
                 }
                 break;
 
