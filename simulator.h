@@ -143,9 +143,15 @@ public:
     int microbatch; // 当前处理的 microbatch（正值表示正向，负值表示反向）
     set<int> completedFwdMicrobatches;  // 已完成正向的 microbatch
     set<int> completedBwdMicrobatches;   // 已完成反向的 microbatch
+    set<int> scheduledFwdMicrobatches;   // 已调度的正向 microbatch
     
     // 跟踪上一个处理的事件，用于时间步进决策
     int lastProcessedMb; // 上一个处理的microbatch
+
+    // 1F1B 图驱动推进：期望处理的 token（>0 表 FWD 的 mb，<0 表 BWD 的 -mb）
+    int expectedToken;
+    // 当前已就绪的 token 集合（由 RECV 或边界条件标记就绪）
+    unordered_set<int> readyTokens;
 
     int handleEvents();
     double stableTime();
@@ -160,6 +166,10 @@ public:
     double calculateNewRankGlobalTime(double time, int mb, double eventStartTime);
     double calculateHandleEventsTime(int mb);
     void updateLastProcessedMb(int mb);
+
+    // 图驱动推进辅助：将 token 标记为就绪，并尝试按 expectedToken 调度
+    void onTokenReady(int token);
+    void tryScheduleExpectedToken();
 };
 
 struct SimResult {
@@ -199,6 +209,10 @@ public:
     Topology* topology;
 
     vector<Task*> tasks;
+    
+    // DP同步计数器：跟踪完成最后一个microbatch BWD的rank数量
+    int completedLastBwdCount;
+    int totalRanks;
 
     void initialize();
     void updateStates(); // waiter filling

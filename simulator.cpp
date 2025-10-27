@@ -292,6 +292,10 @@ void Simulator::initialize() {
     timelineEvents.clear();
     commEvents.clear();
     
+    // 初始化DP同步计数器
+    completedLastBwdCount = 0;
+    totalRanks = workload->ranks.size();
+    
     // 清空microbatch状态，防止全局变量污染
     cout << "[INIT] Before clearing, microbatchStates size: " << MicrobatchManager::microbatchStates.size() << endl;
     MicrobatchManager::microbatchStates.clear();
@@ -364,6 +368,16 @@ void Simulator::initialize() {
     cout << "[INIT-DEBUG] Starting rank initialization..." << endl;
     for (auto rank : workload->ranks) {
         RankTask* task = rank->rankTask;
+        // 初始化图驱动 expectedToken：找到本 stage 的起始 token（优先 FWD=1）
+        {
+            int stage = rank->pp;
+            // 起点：优先尝试 token=1（FWD），若存在 next，则设预期为1，否则设为0等待 RECV
+            task->expectedToken = 1;
+            // stage0 的 FWD(1) 可直接就绪
+            if (rank->pp == 0) {
+                task->onTokenReady(1);
+            }
+        }
         if (rank->pp == 0) { // 第一个pipeline stage的rank
             cout << "[INIT-DEBUG] Initializing first pipeline stage rank " << rank->id << endl;
             cout << "[INIT-DEBUG] Initial rankGlobalTime=" << task->rankGlobalTime << endl;
@@ -371,80 +385,37 @@ void Simulator::initialize() {
             task->remainingTime = workload->fwdCompTime;
             task->microbatch = 1; // 确保microbatch正确设置
             
-            // 记录初始计算事件（结束时间将在progress中设置）
-            recordTimelineEvent(
-                rank->id,
-                NONE_GROUP,       // GroupType
-                NONE_ENDPOINT,    // EndpointType
-                COMPUTE_FWD,      // EventType
-                1,                // microbatch
-                task->rankGlobalTime, // startTime - 使用rank的独立时间
-                task->rankGlobalTime + workload->fwdCompTime,               // endTime - 将在progress中设置
-                "Initial fwd compute"
-            );
-            // 同步更新 microbatch(1) 的全局时间与 rank 的时间
-            cout << "[INIT-DEBUG] Before update MicrobatchGlobalTime: task->rankGlobalTime=" << task->rankGlobalTime 
-                 << ", workload->fwdCompTime=" << workload->fwdCompTime 
-                 << ", total=" << (task->rankGlobalTime + workload->fwdCompTime) << endl;
-            // 直接设置microbatch的全局时间，不依赖handleEvents的调用
-            MicrobatchManager::updateMicrobatchGlobalTime(1, workload->fwdCompTime);
-            // 同时设置当前rank的microbatch时间
-            MicrobatchManager::updateRankMicrobatchTime(rank->id, 1, workload->fwdCompTime);
-            cout << "[INIT-DEBUG] Before rankGlobalTime update: " << task->rankGlobalTime << endl;
-            task->rankGlobalTime += workload->fwdCompTime;
-            cout << "[INIT-DEBUG] After rankGlobalTime update: " << task->rankGlobalTime << endl;
+            // 图驱动机制：不直接记录初始事件，完全依赖onTokenReady(1)触发
+            // 初始化时只设置状态，让图驱动机制自然推进
+            cout << "[INIT-DEBUG] Graph-driven initialization: relying on onTokenReady(1) for first FWD" << endl;
             
-            // 为所有microbatch预调度计算事件：
-            // 仅当存在 TP 或 PP 通信时（需要算/通重叠），才一次性预调度后续 FWD。
-            // 纯 DP 场景（TP<=1 && PP<=1）下不做预调度，按照 1F1B 顺序逐个推进。
-            if (workload->TP > 1 || workload->PP > 1) {
-                for (int mb = 2; mb <= workload->microbatches; ++mb) {
-                    task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime, 0, 0);
-                }
-            }
+            // 修复：不要预调度所有microbatch的前向计算，让1F1B流水线自然推进
+            // 1F1B流水线应该是一个microbatch的FWD完成后立即执行其BWD，然后再处理下一个microbatch
+            // 预调度所有FWD会破坏1F1B的正确顺序，导致所有FWD先执行完再执行所有BWD
             
-            // 修复：对于纯单机场景（TP=1, PP=1, DP=1），需要预调度所有microbatch的前向计算
-            if (workload->TP <= 1 && workload->PP <= 1 && workload->DP <= 1) {
-                for (int mb = 2; mb <= workload->microbatches; ++mb) {
-                    task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime, 0, 0);
-                }
-                cout << "[INIT] Single-machine scenario: pre-scheduled all FWD microbatches for rank " << rank->id << endl;
-            }
+            // 对于需要通信的场景（TP>1或PP>1），也不应该预调度所有microbatch
+            // 而是让1F1B流水线通过事件驱动的方式自然推进
+            cout << "[INIT] 1F1B pipeline: microbatches will be scheduled in 1F1B order (FWD->BWD->FWD->BWD) for rank " << rank->id << endl;
             
-            // 为第一个pipeline stage预调度通信事件（TP优先级高于PP）
-            // 1. 首先预调度TP_FWD事件（如果TP>1）
+            // 图驱动机制：不预调度任何事件，完全依赖onTokenReady(1)触发
+            // 图驱动机制会在COMPUTE_FWD完成后自动调度TP通信事件
             if (workload->TP > 1) {
-                // 预调度第一个TP发送事件（在计算完成后触发）
-                task->addEvent(EndpointType::SENT, EventType::TP_COMM_FWD, 1, TP_COMM, 0, 0, 0);
-                
-                // 注意：不在这里预调度GroupTask事件，而是在RankTask::handleEvents中处理
-                cout << "[INIT] Pre-scheduled TP_FWD SENT event for rank " << rank->id << " (GroupTask event will be added later)" << endl;
+                cout << "[INIT] TP>1: TP events will be triggered by graph-driven mechanism after COMPUTE_FWD completion for rank " << rank->id << endl;
             } else {
                 cout << "[INIT] TP=1, no tensor parallelism communication needed for rank " << rank->id << endl;
             }
             
-            // 2. 然后预调度PP_FWD事件（如果PP>1且TP=1）
-            // 注意：对于TP>1的情况，PP事件将由TP通信完成后触发，不需要在这里预调度
-            if (workload->PP > 1 && workload->TP <= 1) {
-                // 预调度第一个PP发送事件（在计算完成后触发）
-                task->addEvent(EndpointType::SENT, EventType::PP_COMM_FWD, 1, PP_WAIT, 0, 0, 0);
-                
-                // 为下一个rank预调度对应的RECV事件，通过GroupTask管理
-                // if (rank->ppFwdGroup != nullptr && rank->ppFwdGroup->groupTask != nullptr) {
-                //     rank->ppFwdGroup->groupTask->addEvent(rank->id, 1);
-                //     cout << "[INIT] Pre-scheduled PP_FWD event to GroupTask " << rank->ppFwdGroup->id 
-                //          << " for mb=1 (from rank " << rank->id << ")" << endl;
-                // }
-            } else if (workload->PP > 1 && workload->TP > 1) {
-                cout << "[INIT] PP>1 and TP>1: PP events will be triggered by TP communication completion for rank " << rank->id << endl;
+            // 2. PP_FWD事件现在由图驱动机制调度，不需要预调度
+            // 图驱动机制会在COMPUTE_FWD完成后自动调度PP_COMM_FWD
+            if (workload->PP > 1) {
+                cout << "[INIT] PP>1: PP events will be triggered by graph-driven mechanism after COMPUTE_FWD completion for rank " << rank->id << endl;
             } else {
                 cout << "[INIT] PP=1, no pipeline communication needed for rank " << rank->id << endl;
             }
 
-            // 纯DP场景（TP=1, PP=1, DP>1）：在首个FWD后预调度首个BWD，保证DP-only流程可运行
+            // DP场景：不需要预调度BWD，图驱动机制会自然处理1F1B流水线
             if (workload->TP <= 1 && workload->PP <= 1 && workload->DP > 1) {
-                task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, -1, COMPUTE, workload->bwdCompTime, 0, 0);
-                cout << "[INIT] DP-only path: pre-scheduled COMPUTE_BWD for mb=-1 on rank " << rank->id << endl;
+                cout << "[INIT] DP-only path: will use graph-driven mechanism for 1F1B pipeline on rank " << rank->id << endl;
             }
             
             // 修复：对于纯单机场景（TP=1, PP=1, DP=1），需要为第一个microbatch调度反向计算

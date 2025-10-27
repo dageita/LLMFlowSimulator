@@ -258,13 +258,23 @@ void Workload::configureParallelism(){
             if(j<2*(microbatches+stages-1)){
                 int from = graph[s][i];
                 int to = graph[s][j];   
-                nextMicrobatch[make_tuple(s, from)] = to;          
+                nextMicrobatch[make_tuple(s, from)] = to;
+                cout << "[GRAPH-CONFIG] Stage " << s << ": " << from << " -> " << to << endl;
                 i=j-1;                
             }
             else{
                 break;
             }
         }
+    }
+    
+    // 打印完整的图配置用于调试
+    cout << "[GRAPH-CONFIG] Complete nextMicrobatch configuration:" << endl;
+    for (const auto& pair : nextMicrobatch) {
+        int stage = std::get<0>(pair.first);
+        int from = std::get<1>(pair.first);
+        int to = pair.second;
+        cout << "[GRAPH-CONFIG]   Stage " << stage << ": " << from << " -> " << to << endl;
     }
 }
 

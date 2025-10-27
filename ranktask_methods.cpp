@@ -220,6 +220,28 @@ double RankTask::calculateHandleEventsTime(int mb) {
     // 检查当前rank是否真正需要DP通信
     bool needsDPCommunication = (workload->DP > 1);
     
+    // 修复：对于COMPUTE_BWD事件，查找同一个rank同一个abs(mb)的非TP事件的截止时间
+    // 这样可以实现计算和通信的重叠
+    if (mb < 0) {  // 反向计算事件
+        double lastNonTPEventEndTime = 0.0;
+        for (const auto& timelineEvent : simulator->timelineEvents) {
+            // 查找同一个rank同一个abs(mb)的非TP事件
+            if (timelineEvent.rank == rank->id && 
+                abs(timelineEvent.microbatch) == abs(mb) &&
+                timelineEvent.endTime > 0 &&  // 已完成的事件
+                timelineEvent.eventType != TP_COMM_FWD && 
+                timelineEvent.eventType != TP_COMM_BWD) {  // 排除TP通信事件
+                lastNonTPEventEndTime = std::max(lastNonTPEventEndTime, timelineEvent.endTime);
+            }
+        }
+        
+        if (lastNonTPEventEndTime > 0) {
+            cout << "[HANDLE-TIME-CALC] COMPUTE_BWD for mb=" << mb << " found last non-TP event end time: " 
+                 << lastNonTPEventEndTime << " (enabling compute-comm overlap)" << endl;
+            return lastNonTPEventEndTime;
+        }
+    }
+    
     if (abs(mb) == abs(lastProcessedMb)) {
         // 同一个microbatch的事件
         if (needsTPCommunication || needsDPCommunication) {

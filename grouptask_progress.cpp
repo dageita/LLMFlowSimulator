@@ -290,27 +290,21 @@ void GroupTask::progress(double time){
         
         cout << "[GROUP-PROGRESS-DEBUG] After cleanup: waitingCollectives.size=" << waitingCollectives.size() << endl;
         
-        // 优先选择与当前流水线阶段匹配的 microbatch
+        // 按照1F1B流水线顺序处理microbatch：优先处理绝对值更小的microbatch
         if (!waitingCollectives.empty()) {
             cout << "[GROUP-PROGRESS-DEBUG] Before erase, waitingCollectives.size=" << waitingCollectives.size() << endl;
             
-            int currentDir = mb > 0 ? 1 : -1;
-            auto it = find_if(waitingCollectives.begin(), waitingCollectives.end(),
-                [currentDir](Collective* c) { 
-                    return (c->microbatch > 0) == (currentDir > 0); 
+            // 按照microbatch的绝对值排序，优先处理绝对值更小的
+            auto it = min_element(waitingCollectives.begin(), waitingCollectives.end(),
+                [](Collective* a, Collective* b) { 
+                    return abs(a->microbatch) < abs(b->microbatch); 
                 });
             
-            if (it != waitingCollectives.end()) {
-                activeCollective = *it;
-                cout << "[GROUP-PROGRESS-DEBUG] Found matching collective for mb=" << activeCollective->microbatch << endl;
+            activeCollective = *it;
+            cout << "[GROUP-PROGRESS-DEBUG] Selected collective for mb=" << activeCollective->microbatch 
+                 << " (smallest absolute value)" << endl;
             waitingCollectives.erase(it);
-                cout << "[GROUP-PROGRESS-DEBUG] Erased matching collective, remaining size=" << waitingCollectives.size() << endl;
-            } else {
-                activeCollective = waitingCollectives.front();
-                cout << "[GROUP-PROGRESS-DEBUG] No matching collective found, using front mb=" << activeCollective->microbatch << endl;
-                waitingCollectives.erase(waitingCollectives.begin());
-                cout << "[GROUP-PROGRESS-DEBUG] Erased front collective, remaining size=" << waitingCollectives.size() << endl;
-            }
+            cout << "[GROUP-PROGRESS-DEBUG] Erased selected collective, remaining size=" << waitingCollectives.size() << endl;
             
             cout << "[GROUP-PROGRESS-DEBUG] Activated next collective for mb=" << activeCollective->microbatch << endl;
             
@@ -351,15 +345,57 @@ void GroupTask::updateGroupGlobalTime(int mb, int fromRank) {
     cout << "[GROUP-TIME-DEBUG] Last communication end time for rank " << fromRank 
          << " in group " << group->id << ": " << lastCommEndTime << endl;
     
-    // 取发送方microbatch完成时间和上一个通信结束时间的最大值
-    double newGroupTime = std::max(senderMbTime, lastCommEndTime);
-    
-    // 更新group的全局时间
-    groupGlobalTime = newGroupTime;
-    
-    cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
-         << ") updated global time to " << groupGlobalTime 
-         << " (senderMbTime=" << senderMbTime 
-         << ", lastCommEndTime=" << lastCommEndTime
-         << ", fromRank=" << fromRank << ", mb=" << mb << ")" << endl;
+    // 对于DP通信，需要等待所有rank都完成最后一个microbatch的BWD
+    // 使用PP=0 stage的最后一个mb的COMP_BWD结束时间作为DP通信的起始时间
+    if (group->type == GroupType::DP && std::abs(mb) == simulator->workload->microbatches) {
+        // 从timelineEvents中查找PP=0 stage的最后一个mb的COMP_BWD结束时间
+        double pp0StageBwdEndTime = 0.0;
+        for (const auto& timelineEvent : simulator->timelineEvents) {
+            if (timelineEvent.eventType == COMPUTE_BWD && 
+                timelineEvent.microbatch == mb &&
+                timelineEvent.endTime > 0) {
+                // 查找PP=0 stage的rank（pp=0）
+                for (auto rank : simulator->workload->ranks) {
+                    if (rank->pp == 0 && rank->id == timelineEvent.rank) {
+                        pp0StageBwdEndTime = std::max(pp0StageBwdEndTime, timelineEvent.endTime);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (pp0StageBwdEndTime > 0) {
+            cout << "[GROUP-TIME-DEBUG] DP communication for last microbatch, using PP=0 stage BWD end time: " << pp0StageBwdEndTime << endl;
+            double newGroupTime = std::max(pp0StageBwdEndTime, lastCommEndTime);
+            groupGlobalTime = newGroupTime;
+            cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
+                 << ") updated global time to " << groupGlobalTime 
+                 << " (pp0StageBwdEndTime=" << pp0StageBwdEndTime 
+                 << ", lastCommEndTime=" << lastCommEndTime
+                 << ", fromRank=" << fromRank << ", mb=" << mb << ") - DP synchronization" << endl;
+        } else {
+            // 如果找不到PP=0 stage的BWD结束时间，回退到全局microbatch时间
+            double globalMbTime = MicrobatchManager::getMicrobatchGlobalTime(mb);
+            cout << "[GROUP-TIME-DEBUG] DP communication for last microbatch, PP=0 stage BWD end time not found, using global microbatch time: " << globalMbTime << endl;
+            double newGroupTime = std::max(globalMbTime, lastCommEndTime);
+            groupGlobalTime = newGroupTime;
+            cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
+                 << ") updated global time to " << groupGlobalTime 
+                 << " (globalMbTime=" << globalMbTime 
+                 << ", lastCommEndTime=" << lastCommEndTime
+                 << ", fromRank=" << fromRank << ", mb=" << mb << ") - DP synchronization fallback" << endl;
+        }
+    } else {
+        // 取发送方microbatch完成时间和上一个通信结束时间的最大值
+        double newGroupTime = std::max(senderMbTime, lastCommEndTime);
+        
+        // 更新group的全局时间
+        groupGlobalTime = newGroupTime;
+        
+        cout << "[GROUP-TIME] Group " << group->id << " (" << simulator->groupTypeToString(group->type) 
+             << ") updated global time to " << groupGlobalTime 
+             << " (senderMbTime=" << senderMbTime 
+             << ", lastCommEndTime=" << lastCommEndTime
+             << ", fromRank=" << fromRank << ", mb=" << mb << ")" << endl;
+    }
 }
