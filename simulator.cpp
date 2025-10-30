@@ -418,13 +418,6 @@ void Simulator::initialize() {
                 cout << "[INIT] DP-only path: will use graph-driven mechanism for 1F1B pipeline on rank " << rank->id << endl;
             }
             
-            // 修复：对于纯单机场景（TP=1, PP=1, DP=1），需要为第一个microbatch调度反向计算
-            // 因为第一个microbatch的前向计算是在初始化阶段直接执行的，不会触发事件处理逻辑
-            if (workload->TP <= 1 && workload->PP <= 1 && workload->DP <= 1) {
-                task->addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, -1, COMPUTE, workload->bwdCompTime, 0, 0);
-                cout << "[INIT] Single-machine scenario: pre-scheduled COMPUTE_BWD for mb=-1 on rank " << rank->id << endl;
-            }
-            
         } else {
             // 其他pipeline stage的rank保持等待状态，事件将由前一阶段触发
             task->state = PP_WAIT;

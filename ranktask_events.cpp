@@ -37,10 +37,11 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
         switch (eventType) {
             case PP_COMM_FWD:
                 if (ep == EndpointType::RECV && mb > 0) {
-                    // 接收到PP前向通信，直接调度COMPUTE_FWD
+                    // 接收到PP前向通信，直接调度COMPUTE_FWD，并使token ready，保证后续stage也能正确推进
                     shouldErase = true;
                     pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_FWD, mb, COMPUTE, workload->fwdCompTime, 0, 0);
-                    cout << "[PP_FWD->DIRECT] Rank " << rank->id << " received PP_FWD for mb=" << mb << ", directly scheduled COMPUTE_FWD" << endl;
+                    onTokenReady(mb); // 新增，确保token ready
+                    cout << "[PP_FWD->DIRECT] Rank " << rank->id << " received PP_FWD for mb=" << mb << ", directly scheduled COMPUTE_FWD 并 token ready" << endl;
                 }
                 else if (ep == EndpointType::SENT) {
                     // 处理PP前向发送事件，通过GroupTask管理通信
@@ -181,30 +182,16 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     
                     // 根据并行模式决定通信和计算调度策略（并在图推进下切换 expectedToken）
                     if (workload->PP > 1) {
-                        // PP模式：根据Megatron-LM的1F1B实现
-                        if (isFirstRankInPipeline()) {
-                            // rank0：FWD完成后发送PP_FWD，然后立即调度下一个FWD（实现连续两个FWD）
+                        if (!isLastRankInPipeline()) {
+                            // 只要不是pipeline最后一组，FWD完成后要发送PP_FWD给下一个stage
                             pending_events.emplace_back(EndpointType::SENT, PP_COMM_FWD, mb, PP_WAIT, 0, 0, 0);
-                            cout << "[PP-PIPELINE] Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb 
-                                 << " after COMPUTE_FWD (PP mode: first rank)" << endl;
-                            
-                            // Megatron-LM 1F1B模式：rank0的FWD处理
-                            if (mb <= 2) {
-                                // 初始阶段：图驱动机制已处理，这里只记录日志
-                                cout << "[PP-MEGATRON-1F1B] Rank " << rank->id << " completed COMPUTE_FWD for mb=" << mb 
-                                     << " (Megatron 1F1B: initial phase, handled by graph-driven mechanism)" << endl;
-                            } else {
-                                // 交替阶段：mb>2的FWD完成后，等待BWD完成再调度下一个FWD
-                                cout << "[PP-MEGATRON-1F1B] Rank " << rank->id << " completed COMPUTE_FWD for mb=" << mb 
-                                     << " (Megatron 1F1B: alternating phase, waiting for BWD completion)" << endl;
-                            }
-                        } else if (isLastRankInPipeline()) {
-                            // 最后一个rank：FWD完成后直接触发BWD
-                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
-                            cout << "[PP-PIPELINE] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb 
-                                 << " after COMPUTE_FWD (PP mode: last rank)" << endl;
+                            cout << "[PP-PIPELINE] Rank " << rank->id << " scheduled PP_COMM_FWD for mb=" << mb << " (to next pipeline stage)" << endl;
                         }
-                        
+                        if (isLastRankInPipeline()) {
+                            // 最后一组，直接进入BWD
+                            pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
+                            cout << "[PP-PIPELINE] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb << " after COMPUTE_FWD (last pipeline stage)" << endl;
+                        }
                         // TP+PP模式：在COMPUTE_FWD完成后调度TP通信（所有rank都需要）
                         if (workload->TP > 1) {
                             pending_events.emplace_back(EndpointType::SENT, EventType::TP_COMM_FWD, mb, TP_COMM, 0, 0, 0);
@@ -232,10 +219,9 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                             pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
                             cout << "[DP-ONLY-1F1B] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
                                  << " after COMPUTE_FWD for mb=" << mb << endl;
-                        } else if (workload->DP <= 1 && mb > 1 && mb <= workload->microbatches) {
-                            // 纯单机场景：第一个microbatch的反向计算已经在初始化阶段调度，避免重复
+                        } else if (workload->DP <= 1 && mb >= 1 && mb <= workload->microbatches) {
                             pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
-                            cout << "[SINGLE-MACHINE-1F1B] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
+                            cout << "[SINGLE-DEVICE] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb
                                  << " after COMPUTE_FWD for mb=" << mb << endl;
                         }
                     }
