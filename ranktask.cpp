@@ -105,13 +105,10 @@ void RankTask::tryScheduleExpectedToken() {
                         addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, expectedToken, COMPUTE, workload->fwdCompTime, 0, 0);
                         cout << "[PP-MEGATRON-1F1B] Rank " << rank->id << " scheduled COMPUTE_FWD for mb=" << expectedToken << " (Megatron 1F1B: initial phase, mb<=2)" << endl;
                         
-                        // TP模式：在FWD完成后调度TP通信（纯TP模式）
-                        // 对于TP+PP模式，TP通信应该在COMPUTE_FWD完成后调度，避免重复调度
-                        if (workload->TP > 1 && workload->PP <= 1) {
-                            addEvent(EndpointType::SENT, EventType::TP_COMM_FWD, expectedToken, TP_COMM, 0, 0, 0);
-                            cout << "[GRAPH-ADVANCE] Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << expectedToken << " by graph order (pure TP mode)" << endl;
-                        } else if (workload->TP > 1 && workload->PP > 1) {
-                            cout << "[GRAPH-ADVANCE] Rank " << rank->id << " TP+PP mode: TP communication will be scheduled after COMPUTE_FWD completion" << endl;
+                        // TP通信应该在COMPUTE_FWD完成后调度，避免重复调度
+                        // 统一在ranktask_events.cpp的COMPUTE_FWD完成处理中调度TP通信
+                        if (workload->TP > 1) {
+                            cout << "[GRAPH-ADVANCE] Rank " << rank->id << " TP communication will be scheduled after COMPUTE_FWD completion (to avoid duplicate scheduling)" << endl;
                         }
                         
                         // PP模式：PP通信事件应该在COMPUTE_FWD完成后发送，而不是在调度时发送
@@ -138,13 +135,10 @@ void RankTask::tryScheduleExpectedToken() {
             addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_FWD, expectedToken, COMPUTE, workload->fwdCompTime, 0, 0);
             cout << "[GRAPH-ADVANCE] Rank " << rank->id << " scheduled COMPUTE_FWD for mb=" << expectedToken << " by graph order" << endl;
             
-            // TP模式：在FWD完成后调度TP通信（纯TP模式）
-            // 对于TP+PP模式，TP通信应该在COMPUTE_FWD完成后调度，避免重复调度
-            if (workload->TP > 1 && workload->PP <= 1) {
-                addEvent(EndpointType::SENT, EventType::TP_COMM_FWD, expectedToken, TP_COMM, 0, 0, 0);
-                cout << "[GRAPH-ADVANCE] Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << expectedToken << " by graph order (pure TP mode)" << endl;
-            } else if (workload->TP > 1 && workload->PP > 1) {
-                cout << "[GRAPH-ADVANCE] Rank " << rank->id << " TP+PP mode: TP communication will be scheduled after COMPUTE_FWD completion" << endl;
+            // TP通信应该在COMPUTE_FWD完成后调度，避免重复调度
+            // 统一在ranktask_events.cpp的COMPUTE_FWD完成处理中调度TP通信
+            if (workload->TP > 1) {
+                cout << "[GRAPH-ADVANCE] Rank " << rank->id << " TP communication will be scheduled after COMPUTE_FWD completion (to avoid duplicate scheduling)" << endl;
             }
             
             // PP模式：在FWD完成后调度PP通信（如果同时有TP和PP）
@@ -169,14 +163,9 @@ void RankTask::tryScheduleExpectedToken() {
             addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, expectedToken, COMPUTE, workload->bwdCompTime, 0, 0);
             cout << "[GRAPH-ADVANCE] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << expectedToken << " by graph order (pure TP mode)" << endl;
             
-            // TP模式：在BWD完成后调度TP通信（纯TP模式）
-            // 对于TP+PP模式，TP通信应该在COMPUTE_BWD完成后调度，避免重复调度
-            if (workload->PP <= 1) {
-                addEvent(EndpointType::SENT, EventType::TP_COMM_BWD, expectedToken, TP_COMM, 0, 0, 0);
-                cout << "[GRAPH-ADVANCE] Rank " << rank->id << " scheduled TP_COMM_BWD for mb=" << expectedToken << " by graph order (pure TP mode)" << endl;
-            } else {
-                cout << "[GRAPH-ADVANCE] Rank " << rank->id << " TP+PP mode: TP communication will be scheduled after COMPUTE_BWD completion" << endl;
-            }
+            // TP通信应该在COMPUTE_BWD完成后调度，避免重复调度
+            // 统一在ranktask_events.cpp的COMPUTE_BWD完成处理中调度TP通信
+            cout << "[GRAPH-ADVANCE] Rank " << rank->id << " TP communication will be scheduled after COMPUTE_BWD completion (to avoid duplicate scheduling)" << endl;
         } else {
             // 其他模式（DP或单机）：使用图驱动机制调度BWD
             addEvent(EndpointType::NONE_ENDPOINT, EventType::COMPUTE_BWD, expectedToken, COMPUTE, workload->bwdCompTime, 0, 0);

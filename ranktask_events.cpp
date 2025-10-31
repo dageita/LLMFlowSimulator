@@ -192,11 +192,11 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                             pending_events.emplace_back(EndpointType::NONE_ENDPOINT, COMPUTE_BWD, -mb, COMPUTE, workload->bwdCompTime, 0, 0);
                             cout << "[PP-PIPELINE] Rank " << rank->id << " scheduled COMPUTE_BWD for mb=" << -mb << " after COMPUTE_FWD (last pipeline stage)" << endl;
                         }
-                        // TP+PP模式：在COMPUTE_FWD完成后调度TP通信（所有rank都需要）
+                        // 统一在COMPUTE_FWD完成后调度TP通信（所有TP模式：纯TP和TP+PP）
                         if (workload->TP > 1) {
                             pending_events.emplace_back(EndpointType::SENT, EventType::TP_COMM_FWD, mb, TP_COMM, 0, 0, 0);
-                            cout << "[TP+PP] Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << mb
-                                 << " after COMPUTE_FWD (TP+PP mode: all ranks need TP communication)" << endl;
+                            cout << "[TP-COMM] Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << mb
+                                 << " after COMPUTE_FWD completion (all TP modes: pure TP and TP+PP)" << endl;
                         }
                         
                         // PP模式：FWD完成后推进图状态
@@ -209,7 +209,10 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                             cout << "[PP-GRAPH] Rank " << rank->id << " mb=" << mb << " > 2, skipping onTokenReady to avoid conflict with PP-MEGATRON-1F1B" << endl;
                         }
                     } else if (workload->TP > 1) {
-                        // TP模式：使用图驱动机制（纯TP模式）
+                        // 纯TP模式：在COMPUTE_FWD完成后调度TP通信
+                        pending_events.emplace_back(EndpointType::SENT, EventType::TP_COMM_FWD, mb, TP_COMM, 0, 0, 0);
+                        cout << "[TP-COMM] Rank " << rank->id << " scheduled TP_COMM_FWD for mb=" << mb
+                             << " after COMPUTE_FWD completion (pure TP mode)" << endl;
                         cout << "[TP-GRAPH] Rank " << rank->id << " completed COMPUTE_FWD for mb=" << mb 
                              << " (TP mode: using graph-driven mechanism)" << endl;
                     } else {
@@ -304,11 +307,11 @@ int RankTask::handleEvents(){   // < EP, TYPE, MB >
                     // 从TP_BWD转换来的COMPUTE_BWD不应该再次触发TP_BWD
                     
                     // 1. 首先预调度TP_BWD事件（如果TP>1且不是从TP_BWD转换来的）
+                    // 统一在COMPUTE_BWD完成后调度TP通信，避免与图驱动机制重复调度
                     if (workload->TP > 1 && mb < 0) {
-                        // TP+PP模式：在COMPUTE_BWD完成后调度TP通信（所有rank都需要）
                         pending_events.emplace_back(EndpointType::SENT, EventType::TP_COMM_BWD, mb, TP_COMM, 0, 0, 0);
-                        cout << "[TP+PP] Rank " << rank->id << " scheduled TP_COMM_BWD for mb=" << mb
-                             << " after COMPUTE_BWD (TP+PP mode: all ranks need TP communication)" << endl;
+                        cout << "[TP-COMM] Rank " << rank->id << " scheduled TP_COMM_BWD for mb=" << mb
+                             << " after COMPUTE_BWD completion (all TP modes: pure TP and TP+PP)" << endl;
                     }
                     
                     // 2. 然后预调度PP_BWD事件（如果PP>1且不是第一个rank）
